@@ -6,9 +6,9 @@
 ## 顶层总览
 
 ```
-self-learing/
-├── README.md                  # 项目首页：简介、快速开始、学习主线
-├── CLAUDE.md                 # 你最初写给我的需求（原始记录）
+gpu-kernel-learning/
+├── README.md                  # 专题首页：简介、快速开始、学习主线
+├── AGENTS.md                 # 本专题的 Agent 教学上下文
 ├── MISSION.md                # 🎯 学习使命：为什么学 / 成功标准 / 边界
 ├── NOTES.md                  # 教学偏好 & 待确认项
 ├── RESOURCES.md              # 高信任知识源清单（本地仓库 + 权威外部 + 社区）
@@ -22,7 +22,8 @@ self-learing/
 │   └── 0001-cuda-core-to-tensor-core.html
 ├── assets/                   # 各课共享组件
 │   └── style.css             # 统一样式表
-└── repos/                    # 📦 你 clone 的 8 个参考仓库（见下）
+├── hw/                       # 课程配套代码与作业
+└── repos/                    # 📦 7 个 Git submodule 参考仓库（见下）
 ```
 
 ### 教学工作区各部分的分工
@@ -40,7 +41,7 @@ self-learing/
 
 ## `repos/` — 参考仓库
 
-8 个仓库。按用途分三类：**知识主脊**、**动手素材**、**练习题库**。
+7 个仓库。按用途分三类：**知识主脊**、**动手素材**、**练习题库**。
 
 ### 🌟 知识主脊
 
@@ -89,7 +90,6 @@ repos/CUDA_Kernel_Samples/                 # 干净的逐步优化样例
 ```
 repos/Cuda-Tutorials/     # 编号 .cu 单文件练习（从 vec-add 到 tensor core）
 repos/LeetGPU/            # 算法题式 GPU 练手：Conv / Attention / Prefix Sum / Softmax …
-repos/interview_code/     # 面试题：cuda / quant / cpp / python / cf
 ```
 
 ---
