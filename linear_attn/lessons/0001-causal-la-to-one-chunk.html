@@ -7,6 +7,7 @@
   <title>第 1 课｜从 Causal LA 到一个 Chunk</title>
   <link rel="stylesheet" href="../assets/course.css">
   <script src="../assets/quiz.js" defer></script>
+  <script src="../assets/code-highlight.js" defer></script>
 </head>
 <body>
   <article class="course-shell">
@@ -131,7 +132,7 @@
 
       <section id="code">
         <h2>3｜把公式翻译成最小 PyTorch</h2>
-        <pre><code>def recurrent_la(q, k, v):
+        <pre><code class="language-python">def recurrent_la(q, k, v):
     # q, k: [T, K]   v: [T, V]
     T, K = q.shape
     V = v.shape[-1]

@@ -7,6 +7,7 @@
   <title>第 3 课｜Delta Rule 为什么需要三角求解</title>
   <link rel="stylesheet" href="../assets/course.css">
   <script src="../assets/quiz.js" defer></script>
+  <script src="../assets/code-highlight.js" defer></script>
 </head>
 <body>
   <article class="course-shell">
@@ -177,7 +178,7 @@
 
       <section id="code">
         <h2>5｜最小 PyTorch reference</h2>
-        <pre><code>def recurrent_delta(q, k, v, beta, state):
+        <pre><code class="language-python">def recurrent_delta(q, k, v, beta, state):
     out = []
     for t in range(q.shape[0]):
         residual = beta[t] * (v[t] - k[t] @ state)

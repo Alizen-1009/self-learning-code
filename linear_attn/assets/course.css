@@ -110,14 +110,28 @@ code, pre { font-family: var(--mono); }
 code { font-size: .88em; color: #174d47; }
 pre {
   margin: 24px 0;
-  padding: 20px;
+  padding: 22px;
   overflow-x: auto;
+  border: 1px solid #2c4039;
   border-radius: 14px;
-  color: #e7f1ec;
-  background: var(--code);
+  color: #dce9e3;
+  background: #101a17;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
   font-size: 0.82rem;
-  line-height: 1.62;
+  line-height: 1.68;
+  tab-size: 4;
 }
+pre code { color: inherit; font-size: inherit; }
+pre code.is-highlighted { color: #dce9e3; }
+.tok-keyword { color: #ff8f70; font-weight: 700; }
+.tok-function { color: #7ec8e3; font-weight: 700; }
+.tok-string { color: #e8c477; }
+.tok-number { color: #8bd5ca; }
+.tok-comment { color: #80928a; font-style: italic; }
+.tok-literal { color: #c4a7e7; font-weight: 650; }
+.tok-builtin { color: #d4a5e5; }
+.tok-module { color: #73daca; font-weight: 650; }
+.tok-operator { color: #f3f0e8; }
 
 .shape-grid, .two-column {
   display: grid;

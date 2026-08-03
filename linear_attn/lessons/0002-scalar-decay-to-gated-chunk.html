@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="../assets/course.css">
   <script src="../assets/quiz.js" defer></script>
   <script src="../assets/decay-demo.js" defer></script>
+  <script src="../assets/code-highlight.js" defer></script>
 </head>
 <body>
   <article class="course-shell">
@@ -152,7 +153,7 @@
 
       <section id="code">
         <h2>3｜最小 PyTorch reference</h2>
-        <pre><code>def recurrent_gla(q, k, v, g, state):
+        <pre><code class="language-python">def recurrent_gla(q, k, v, g, state):
     # q,k:[T,K]  v:[T,V]  g:[T]  state:[K,V]
     out = []
     for t in range(q.shape[0]):
@@ -182,7 +183,7 @@ def one_chunk_gla(q, k, v, g, state_in):
 
         <h3>与 FLA 源码对齐</h3>
         <p>打开 <a href="../code/fla/fla/ops/gated_delta_rule/naive.py"><code>naive_chunk_gated_delta_rule</code></a>，先忽略 delta/WY correction，只找下面三处：</p>
-        <pre><code>decay = decay.cumsum(-1)
+        <pre><code class="language-python">decay = decay.cumsum(-1)
 L_mask = exp(decay_i - decay_j).tril()
 o_inter = (q_i * exp(decay_i)) @ S
 S = S * exp(decay_last) + (... exp(decay_last - decay_i) ...).T @ v_new</code></pre>

@@ -7,6 +7,7 @@
   <title>第 4 课｜完整拼出 Gated Delta Chunk</title>
   <link rel="stylesheet" href="../assets/course.css">
   <script src="../assets/quiz.js" defer></script>
+  <script src="../assets/code-highlight.js" defer></script>
 </head>
 <body>
   <article class="course-shell">
@@ -157,13 +158,13 @@
         <p>打开本地 <a href="../code/fla/fla/ops/gated_delta_rule/naive.py"><code>naive_chunk_gated_delta_rule</code></a>，按下面顺序阅读。</p>
 
         <h3>① 预处理 β 与 chunk cumsum</h3>
-        <pre><code>v = v * beta[..., None]               # βV
+        <pre><code class="language-python">v = v * beta[..., None]               # βV
 k_beta = k * beta[..., None]           # βK
 decay = decay.cumsum(-1)               # G
 L_mask = exp(G_i - G_j).tril()         # relative decay × M≤</code></pre>
 
         <h3>② 构造严格下三角依赖并求 A⁻¹</h3>
-        <pre><code>attn = -((k_beta @ k.T) * L_mask)
+        <pre><code class="language-python">attn = -((k_beta @ k.T) * L_mask)
 attn = attn.masked_fill(diagonal_and_upper, 0)
 
 # 逐行累积严格下三角 inverse
@@ -174,15 +175,15 @@ attn = attn + I                        # A⁻¹</code></pre>
         <p>代码把负号吸收进 inverse recurrence；不要仅凭 <code>attn</code> 名字判断它是普通 attention score。</p>
 
         <h3>③ 准备 U/W</h3>
-        <pre><code>U = attn @ (beta * V)                  # k_cumsum
+        <pre><code class="language-python">U = attn @ (beta * V)                  # k_cumsum
 W = attn @ (beta * exp(G) * K)         # k_cumdecay</code></pre>
 
         <h3>④ 注入 incoming state，得到真正 residual</h3>
-        <pre><code>prediction = W @ S_in                  # v_prime
+        <pre><code class="language-python">prediction = W @ S_in                  # v_prime
 R = U - prediction                     # v_new</code></pre>
 
         <h3>⑤ 计算 output 与 final state</h3>
-        <pre><code>P = tril((Q @ K.T) * exp(G_i - G_j))
+        <pre><code class="language-python">P = tril((Q @ K.T) * exp(G_i - G_j))
 O = (Q * exp(G)) @ S_in + P @ R
 
 K_end = K * exp(G_last - G)
@@ -196,7 +197,7 @@ S_out = exp(G_last) * S_in + K_end.T @ R</code></pre>
 
       <section>
         <h2>5｜最小 PyTorch 公式骨架</h2>
-        <pre><code>def one_chunk_gated_delta(q, k, v, g, beta, state_in):
+        <pre><code class="language-python">def one_chunk_gated_delta(q, k, v, g, beta, state_in):
     C = q.shape[0]
     G = g.cumsum(0)
     strict = torch.tril(torch.ones(C, C, device=q.device), -1)

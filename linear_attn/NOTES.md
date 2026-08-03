@@ -8,3 +8,4 @@
 - 不因“看懂讲解”记录已掌握；必须由练习答案或代码产出提供证据后再写 learning record。
 - 用户反馈前四课符号过多、主线不清。后续改为自顶向下工程教学：先给完整 GDN chunk pipeline 和源码调用图，再按需要补推导；避免把一个工程问题拆成多课公式。
 - 用户当前重点转向 FlashInfer SM103 GDN 工程实现；需要明确区分算法层 chunk、grid 是否含 chunk 维，以及多 kernel/单 persistent kernel 两种调度。
+- HTML 代码块需要明显的 Python 语法配色与高对比度，不能使用单一前景色。
