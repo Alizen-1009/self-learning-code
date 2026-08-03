@@ -6,3 +6,5 @@
 - 第一阶段顺序：vanilla causal LA → recurrent state → 单 chunk 分解 → scalar decay → delta/WY → gated delta 合并 → Triton baseline；之后进入 KDA。
 - 用户在第 1 课后追问 causal mask M，说明下一课应显式区分 0/1 mask M 与带相对衰减的加权矩阵 D。
 - 不因“看懂讲解”记录已掌握；必须由练习答案或代码产出提供证据后再写 learning record。
+- 用户反馈前四课符号过多、主线不清。后续改为自顶向下工程教学：先给完整 GDN chunk pipeline 和源码调用图，再按需要补推导；避免把一个工程问题拆成多课公式。
+- 用户当前重点转向 FlashInfer SM103 GDN 工程实现；需要明确区分算法层 chunk、grid 是否含 chunk 维，以及多 kernel/单 persistent kernel 两种调度。
