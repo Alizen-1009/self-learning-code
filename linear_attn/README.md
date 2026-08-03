@@ -14,8 +14,9 @@
 
 1. [学习使命](MISSION.md)：最终要独立实现并优化 GDN/KDA prefill kernel。
 2. [第 1 课：从 Causal LA 到一个 Chunk](lessons/0001-causal-la-to-one-chunk.html)
-3. [公式速查表](reference/linear-attention-equations.html)
-4. [可信资源](RESOURCES.md)
+3. [第 2 课：Scalar Decay 如何进入 Chunk](lessons/0002-scalar-decay-to-gated-chunk.html)
+4. [公式速查表](reference/linear-attention-equations.html)
+5. [可信资源](RESOURCES.md)
 
 ### 原有阅读指南
 

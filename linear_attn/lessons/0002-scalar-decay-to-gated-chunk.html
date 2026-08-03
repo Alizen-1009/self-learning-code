@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="从 scalar-gated Linear Attention recurrence 推导带相对衰减矩阵的 chunk form。">
+  <title>第 2 课｜Scalar Decay 如何进入 Chunk</title>
+  <link rel="stylesheet" href="../assets/course.css">
+  <script src="../assets/quiz.js" defer></script>
+  <script src="../assets/decay-demo.js" defer></script>
+</head>
+<body>
+  <article class="course-shell">
+    <header class="lesson-header">
+      <p class="eyebrow">Linear Attention Kernel Course · Lesson 02</p>
+      <h1>Scalar Decay<br>如何进入 Chunk</h1>
+      <p class="deck">把上一课的 0/1 causal mask 升级为“因果关系 × 相对衰减”，看懂 FLA 代码里的 <code>cumsum(g)</code> 与 <code>exp(Gᵢ−Gⱼ)</code>。</p>
+      <div class="lesson-meta">
+        <span class="pill">约 18 分钟</span>
+        <span class="pill">GLA/GDN 前置骨架</span>
+        <span class="pill">无需 GPU</span>
+      </div>
+    </header>
+
+    <nav class="lesson-nav" aria-label="课程导航">
+      <a href="0001-causal-la-to-one-chunk.html">上一课</a>
+      <a href="#recall">回忆 M</a>
+      <a href="#unroll">展开 decay</a>
+      <a href="#chunk">Chunk form</a>
+      <a href="#code">实现</a>
+      <a href="#quiz">检索练习</a>
+      <a href="../reference/linear-attention-equations.html">公式表</a>
+    </nav>
+
+    <main>
+      <section id="recall">
+        <h2>0｜先取回上一课的 M</h2>
+        <div class="retrieval">
+          <p>不回看第一课：对于 chunk 内 query 行 <code>i</code> 和 key 列 <code>j</code>，什么时候 <code>M[i,j]=1</code>？</p>
+          <button type="button" data-reveal-target="mask-answer">显示参考答案</button>
+          <div class="reveal" id="mask-answer">
+            <p><code>M[i,j] = 1[j ≤ i]</code>。它是包含对角线的下三角 causal mask。</p>
+          </div>
+        </div>
+        <p>这一课 <strong>M 不会消失</strong>。它仍负责“能否看到”，新加入的 decay 只负责“能看到多少”。</p>
+      </section>
+
+      <section>
+        <h2>本课的可见成果</h2>
+        <div class="objective">
+          <span class="label">完成标准</span>
+          <p>能从 scalar-gated recurrence 独立写出加权下三角矩阵 <code>D</code>、chunk output 和 chunk final state。</p>
+        </div>
+        <div class="equation">
+          D<sub>ij</sub> = 1[j≤i] · exp(G<sub>i</sub>−G<sub>j</sub>)<br>
+          O = (Q ⊙ exp(G))·S<sub>in</sub> + ((Q·Kᵀ) ⊙ D)·V
+          <span class="eq-note">G 是 chunk 内 log-decay 的 cumulative sum；Q 的 exp(G) 按行缩放。</span>
+        </div>
+      </section>
+
+      <section id="unroll">
+        <h2>1｜从一个 scalar gate 开始</h2>
+        <p class="lede">令 <code>gₜ ≤ 0</code> 是 log-space gate，实际保留率为 <code>αₜ = exp(gₜ)</code>。先只加入 forget gate，不加入 delta correction：</p>
+        <div class="equation">
+          S<sub>t</sub> = exp(g<sub>t</sub>)·S<sub>t−1</sub> + k<sub>t</sub>v<sub>t</sub>ᵀ<br>
+          o<sub>t</sub> = q<sub>t</sub>ᵀS<sub>t</sub>
+        </div>
+        <div class="callout">
+          <span class="label">先分清语义</span>
+          <p>旧状态在写入当前 <code>kₜvₜᵀ</code> 之前衰减。因此当前 token 的自身贡献系数仍是 1；更早 token 会按经过的 gate 连乘。</p>
+        </div>
+
+        <h3>在一个 chunk 内定义 cumulative log-decay</h3>
+        <div class="equation">
+          G<sub>i</sub> := Σ<sub>m=0..i</sub> g<sub>m</sub>
+        </div>
+        <p>把 recurrence 展开到 chunk 内第 <code>i</code> 个 token：</p>
+        <div class="equation">
+          S<sub>i</sub> = exp(G<sub>i</sub>)·S<sub>in</sub>
+          + Σ<sub>j≤i</sub> exp(G<sub>i</sub>−G<sub>j</sub>)·k<sub>j</sub>v<sub>j</sub>ᵀ
+        </div>
+
+        <ol class="steps">
+          <li><strong><code>exp(Gᵢ)</code></strong>：进入 chunk 前的状态要经过 token 0 到 i 的全部 gate。</li>
+          <li><strong><code>exp(Gᵢ−Gⱼ)</code></strong>：token j 的新写入只经过 j 之后到 i 的 gate；当 i=j 时指数为 0，系数为 1。</li>
+          <li><strong><code>j≤i</code></strong>：仍由 causal mask 保证不能读取未来。</li>
+        </ol>
+
+        <div class="checkpoint">
+          <span class="label">C = 2 展开</span>
+          <p><code>S₀ = exp(g₀)S_in + k₀v₀ᵀ</code></p>
+          <p><code>S₁ = exp(g₀+g₁)S_in + exp(g₁)k₀v₀ᵀ + k₁v₁ᵀ</code></p>
+          <p>其中 <code>exp(g₁) = exp(G₁−G₀)</code>。</p>
+        </div>
+      </section>
+
+      <section id="chunk">
+        <h2>2｜M 变成带权重的 D</h2>
+        <p>上一课的 <code>M</code> 只包含 0/1。现在定义：</p>
+        <div class="equation">
+          D<sub>ij</sub> := M<sub>ij</sub> · exp(G<sub>i</sub>−G<sub>j</sub>)
+        </div>
+        <p>因此：</p>
+        <ul>
+          <li><code>j &gt; i</code>：未来位置，<code>D[i,j]=0</code>；</li>
+          <li><code>j = i</code>：当前 token，<code>D[i,i]=1</code>；</li>
+          <li><code>j &lt; i</code>：历史 token，权重是从 j 之后到 i 的累计衰减。</li>
+        </ul>
+
+        <div class="decay-demo" data-decay-demo data-size="4">
+          <span class="label">交互：uniform α 的 D 矩阵</span>
+          <div class="decay-control">
+            <label for="alpha-slider">每步保留率 α</label>
+            <input id="alpha-slider" data-decay-slider type="range" min="0.30" max="1.00" step="0.05" value="0.80">
+            <output data-decay-value>0.80</output>
+          </div>
+          <div class="matrix-wrap" data-decay-matrix></div>
+          <p class="small">橙色是历史项 <code>α^(i−j)</code>，绿色是对角线 1，灰色是被 causal mask 删除的未来项。</p>
+        </div>
+
+        <h3>Chunk output</h3>
+        <p>将 <code>oᵢ=qᵢᵀSᵢ</code> 对所有行堆叠：</p>
+        <div class="equation">
+          O = (Q ⊙ exp(G))·S<sub>in</sub> + ((Q·Kᵀ) ⊙ D)·V
+        </div>
+        <div class="two-column">
+          <div class="shape-card">
+            <strong>Inter-chunk</strong>
+            <p><code>(Q⊙exp(G))·S_in</code></p>
+            <p class="small">incoming state 到每个 query 位置要经过不同长度的 decay。</p>
+          </div>
+          <div class="shape-card">
+            <strong>Intra-chunk</strong>
+            <p><code>((QKᵀ)⊙D)·V</code></p>
+            <p class="small">causal mask 与相对 decay 一起作用于块内 score。</p>
+          </div>
+        </div>
+
+        <h3>Chunk final state</h3>
+        <p>令 <code>G_last=G[C−1]</code>，chunk 末状态是：</p>
+        <div class="equation">
+          S<sub>out</sub> = exp(G<sub>last</sub>)·S<sub>in</sub>
+          + (K ⊙ exp(G<sub>last</sub>−G))ᵀ·V
+        </div>
+        <p>这里 <code>exp(G_last−G)</code> 按 K 的 token 行缩放；越早的 key 到 chunk 末尾时衰减越多。</p>
+
+        <div class="callout">
+          <span class="label">退化检查</span>
+          <p>若所有 <code>g=0</code>，则 <code>G=0</code>、<code>D=M</code>，三个公式精确退化回上一课的 vanilla LA。推导新公式时，退化检查是最便宜的 correctness test。</p>
+        </div>
+      </section>
+
+      <section id="code">
+        <h2>3｜最小 PyTorch reference</h2>
+        <pre><code>def recurrent_gla(q, k, v, g, state):
+    # q,k:[T,K]  v:[T,V]  g:[T]  state:[K,V]
+    out = []
+    for t in range(q.shape[0]):
+        state = g[t].exp() * state + torch.outer(k[t], v[t])
+        out.append(q[t] @ state)
+    return torch.stack(out), state
+
+
+def one_chunk_gla(q, k, v, g, state_in):
+    # q,k:[C,K]  v:[C,V]  g:[C]
+    C = q.shape[0]
+    G = g.cumsum(0)
+    M = torch.tril(torch.ones(C, C, device=q.device))
+    D = (G[:, None] - G[None, :]).exp() * M
+
+    inter = (q * G.exp()[:, None]) @ state_in
+    intra = ((q @ k.T) * D) @ v
+
+    k_to_end = k * (G[-1] - G).exp()[:, None]
+    state_out = G[-1].exp() * state_in + k_to_end.T @ v
+    return inter + intra, state_out</code></pre>
+
+        <div class="objective">
+          <span class="label">动手任务</span>
+          <p>使用负值 <code>g</code>，比较逐 token recurrent 与连续两个 chunk 的 output/final state。然后做两次故障注入：删除 <code>M</code>；把 <code>Gᵢ−Gⱼ</code> 写反。观察哪一部分最先偏离。</p>
+        </div>
+
+        <h3>与 FLA 源码对齐</h3>
+        <p>打开 <a href="../code/fla/fla/ops/gated_delta_rule/naive.py"><code>naive_chunk_gated_delta_rule</code></a>，先忽略 delta/WY correction，只找下面三处：</p>
+        <pre><code>decay = decay.cumsum(-1)
+L_mask = exp(decay_i - decay_j).tril()
+o_inter = (q_i * exp(decay_i)) @ S
+S = S * exp(decay_last) + (... exp(decay_last - decay_i) ...).T @ v_new</code></pre>
+        <p>你现在已经知道这些指数项不是“优化技巧”，而是 recurrent 展开的数学要求。</p>
+
+        <div class="callout">
+          <span class="label">数值警告</span>
+          <p>公式可以写成 <code>exp(Gᵢ)·exp(−Gⱼ)</code>，但当累计 decay 很负时，单独计算 <code>exp(−Gⱼ)</code> 可能溢出。生产 kernel 更倾向直接计算局部差值、使用 offset，或转换到 base-2 指数。后续 KDA safe-gate 课程会回到这个问题。</p>
+        </div>
+      </section>
+
+      <section id="quiz">
+        <h2>4｜立即检索</h2>
+        <form class="quiz quiz-form">
+          <fieldset class="quiz-question" data-answer="relative" data-explanation="历史 token j 到当前位置 i 只经过 j 之后的 gate，所以使用累计差 Gᵢ−Gⱼ。">
+            <legend>1. 块内历史项从 j 到 i 的 log-decay 是什么？</legend>
+            <label class="option"><input type="radio" name="q1" value="relative">累计差 Gᵢ−Gⱼ</label>
+            <label class="option"><input type="radio" name="q1" value="forward">累计和 Gᵢ＋Gⱼ</label>
+            <label class="option"><input type="radio" name="q1" value="reverse">累计差 Gⱼ−Gᵢ</label>
+          </fieldset>
+
+          <fieldset class="quiz-question" data-answer="mask" data-explanation="g=0 时所有相对 decay 都是 1，D 只剩下 causal mask M。">
+            <legend>2. 所有 g=0 时，加权矩阵 D 退化成什么？</legend>
+            <label class="option"><input type="radio" name="q2" value="mask">因果下三角 M</label>
+            <label class="option"><input type="radio" name="q2" value="zero">全零方矩阵 Z</label>
+            <label class="option"><input type="radio" name="q2" value="dense">全一方矩阵 J</label>
+          </fieldset>
+
+          <fieldset class="quiz-question" data-answer="last" data-explanation="incoming state 要经过整个 chunk，因此乘 exp(G_last)。">
+            <legend>3. S_in 到 S_out 的衰减系数是什么？</legend>
+            <label class="option"><input type="radio" name="q3" value="first">exp(G_first)</label>
+            <label class="option"><input type="radio" name="q3" value="last">exp(G_last)</label>
+            <label class="option"><input type="radio" name="q3" value="mean">exp(G_mean)</label>
+          </fieldset>
+
+          <button type="submit">检查答案</button>
+          <p class="feedback" role="status" aria-live="polite"></p>
+        </form>
+      </section>
+
+      <section>
+        <h2>5｜空白纸检索</h2>
+        <div class="retrieval">
+          <p>不看上文，写出：</p>
+          <ol>
+            <li><code>Gᵢ</code> 的定义；</li>
+            <li><code>D[i,j]</code>；</li>
+            <li>chunk output；</li>
+            <li>chunk final state。</li>
+          </ol>
+          <button type="button" data-reveal-target="retrieval-answer">显示参考答案</button>
+          <div class="reveal" id="retrieval-answer">
+            <p><code>Gᵢ = Σₘ₌₀..ᵢ gₘ</code></p>
+            <p><code>Dᵢⱼ = 1[j≤i]·exp(Gᵢ−Gⱼ)</code></p>
+            <p><code>O = (Q⊙exp(G))S_in + ((QKᵀ)⊙D)V</code></p>
+            <p><code>S_out = exp(G_last)S_in + (K⊙exp(G_last−G))ᵀV</code></p>
+          </div>
+        </div>
+        <p>下一课会加入 delta rule：<code>v − kᵀS</code> 为什么让块内 token 相互依赖，以及 FLA 为什么需要三角求解/WY representation。推导中任何一个下标不确定，都可以直接发给我检查。</p>
+      </section>
+    </main>
+
+    <footer class="lesson-footer">
+      <p><strong>主参考：</strong><a href="https://arxiv.org/abs/2312.06635">Gated Linear Attention Transformers with Hardware-Efficient Training</a></p>
+      <p><strong>代码锚点：</strong><a href="../code/fla/fla/ops/gated_delta_rule/naive.py">FLA naive gated delta rule</a></p>
+      <p>建议明天先从记忆写出 D，再打开公式速查表核对。</p>
+    </footer>
+  </article>
+</body>
+</html>

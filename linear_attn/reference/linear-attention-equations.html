@@ -14,7 +14,8 @@
       <p class="deck">从 causal attention、recurrent state 到一个 chunk 的最小公式集。</p>
     </header>
     <nav class="lesson-nav">
-      <a href="../lessons/0001-causal-la-to-one-chunk.html">返回第 1 课</a>
+      <a href="../lessons/0001-causal-la-to-one-chunk.html">第 1 课</a>
+      <a href="../lessons/0002-scalar-decay-to-gated-chunk.html">第 2 课</a>
       <a href="glossary.html">术语表</a>
       <a href="../RESOURCES.md">资源</a>
     </nav>
@@ -59,6 +60,20 @@ M = [[1, 0, 0, 0],
      [1, 1, 0, 0],
      [1, 1, 1, 0],
      [1, 1, 1, 1]]</code></pre>
+      </section>
+
+      <section>
+        <h2>Scalar-gated recurrent</h2>
+        <div class="equation">S<sub>t</sub> = exp(g<sub>t</sub>)·S<sub>t−1</sub> + k<sub>t</sub>v<sub>t</sub>ᵀ</div>
+        <div class="equation">G<sub>i</sub> = Σ<sub>m=0..i</sub>g<sub>m</sub></div>
+      </section>
+
+      <section>
+        <h2>Scalar-gated chunk</h2>
+        <div class="equation">D<sub>ij</sub> = 1[j≤i]·exp(G<sub>i</sub>−G<sub>j</sub>)</div>
+        <div class="equation">O = (Q⊙exp(G))·S<sub>in</sub> + ((QKᵀ)⊙D)·V</div>
+        <div class="equation">S<sub>out</sub> = exp(G<sub>last</sub>)·S<sub>in</sub> + (K⊙exp(G<sub>last</sub>−G))ᵀ·V</div>
+        <div class="callout"><span class="label">退化检查</span><p>所有 <code>g=0</code> 时，<code>G=0</code>、<code>D=M</code>，回到 vanilla LA。</p></div>
       </section>
 
       <section>
