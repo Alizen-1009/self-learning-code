@@ -25,7 +25,7 @@ python scripts/refresh_curated_sources.py
 
 脚本会：
 
-1. 在 `liner_attn/.source-refresh-*` 临时目录浅克隆四个仓库；
+1. 在 `linear_attn/.source-refresh-*` 临时目录浅克隆四个仓库；
 2. 生成新的精选源码、revision 和 checksum；
 3. 所有仓库都成功后才替换 `code/`；
 4. 自动清理临时 clone。

@@ -6,7 +6,7 @@
 [FlashInfer](https://github.com/flashinfer-ai/flashinfer) 和
 [cuLA](https://github.com/inclusionAI/cuLA) 的实现与优化。
 
-> 目录名暂沿用 `liner_attn`；正文统一使用正确拼写 **linear attention**。
+> 目录名使用 `linear_attn`，正文统一使用 **linear attention**。
 
 ## 从这里开始
 
