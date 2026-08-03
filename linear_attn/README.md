@@ -10,6 +10,15 @@
 
 ## 从这里开始
 
+### 交互式课程
+
+1. [学习使命](MISSION.md)：最终要独立实现并优化 GDN/KDA prefill kernel。
+2. [第 1 课：从 Causal LA 到一个 Chunk](lessons/0001-causal-la-to-one-chunk.html)
+3. [公式速查表](reference/linear-attention-equations.html)
+4. [可信资源](RESOURCES.md)
+
+### 原有阅读指南
+
 1. [数学与核心概念](docs/01-foundations.md)：先弄清状态递推、GDN/KDA 的差别。
 2. [代码阅读顺序](docs/02-code-reading-map.md)：从 reference 一路读到 Triton、CUTLASS、CuTe DSL。
 3. [优化实验路线](docs/03-optimization-labs.md)：按 correctness → profile → 单变量优化推进。

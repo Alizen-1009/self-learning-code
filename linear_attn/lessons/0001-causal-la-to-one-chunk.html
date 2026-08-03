@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="从 causal Linear Attention 的逐 token 递推，推导一个 chunk 的 inter/intra 矩阵形式。">
+  <title>第 1 课｜从 Causal LA 到一个 Chunk</title>
+  <link rel="stylesheet" href="../assets/course.css">
+  <script src="../assets/quiz.js" defer></script>
+</head>
+<body>
+  <article class="course-shell">
+    <header class="lesson-header">
+      <p class="eyebrow">Linear Attention Kernel Course · Lesson 01</p>
+      <h1>从 Causal LA<br>到一个 Chunk</h1>
+      <p class="deck">今天只做一件事：把逐 token 的状态递推，亲手改写成一个 GPU 友好的块内矩阵公式。</p>
+      <div class="lesson-meta">
+        <span class="pill">约 15 分钟</span>
+        <span class="pill">数学 → Shape → PyTorch</span>
+        <span class="pill">无需 GPU</span>
+      </div>
+    </header>
+
+    <nav class="lesson-nav" aria-label="课程导航">
+      <a href="#goal">目标</a>
+      <a href="#recurrent">递推</a>
+      <a href="#chunk">Chunk</a>
+      <a href="#code">实现</a>
+      <a href="#quiz">检索练习</a>
+      <a href="../reference/linear-attention-equations.html">公式表</a>
+      <a href="../reference/glossary.html">术语表</a>
+    </nav>
+
+    <main>
+      <section id="goal">
+        <h2>本课的可见成果</h2>
+        <div class="objective">
+          <span class="label">完成标准</span>
+          <p>不看资料，能写出下面三个式子，并解释 <strong>inter-chunk</strong> 与 <strong>intra-chunk</strong> 各是哪一项。</p>
+        </div>
+        <div class="equation">
+          O = Q·S<sub>in</sub> + ((Q·Kᵀ) ⊙ M)·V<br>
+          S<sub>out</sub> = S<sub>in</sub> + Kᵀ·V
+          <span class="eq-note">这里先研究无归一化、无 gate 的 causal Linear Attention；M 是含对角线的下三角 mask。</span>
+        </div>
+        <p>这一步直接服务于使命：后续 GDN/KDA 的 chunk kernel 虽然会加入 decay、delta correction 和三角求解，但仍围绕“进入块的状态 + 块内因果贡献 + 离开块的状态”组织。</p>
+      </section>
+
+      <section id="recurrent">
+        <h2>1｜先把二次注意力折成一个状态</h2>
+        <p class="lede">对 causal、无 softmax 的 Linear Attention，token <em>t</em> 只能看见 <code>i ≤ t</code>：</p>
+        <div class="equation">
+          o<sub>t</sub> = Σ<sub>i≤t</sub> (q<sub>t</sub>ᵀk<sub>i</sub>)v<sub>i</sub>
+        </div>
+        <p>标量内积可以和 value 的加权重新结合：</p>
+        <ol class="steps">
+          <li>
+            <strong>把 query 提到求和外。</strong>
+            <div class="equation">o<sub>t</sub> = q<sub>t</sub>ᵀ (Σ<sub>i≤t</sub> k<sub>i</sub>v<sub>i</sub>ᵀ)</div>
+          </li>
+          <li>
+            <strong>给括号里的矩阵命名。</strong>
+            <div class="equation">S<sub>t</sub> := Σ<sub>i≤t</sub> k<sub>i</sub>v<sub>i</sub>ᵀ</div>
+          </li>
+          <li>
+            <strong>得到递推。</strong>
+            <div class="equation">S<sub>t</sub> = S<sub>t−1</sub> + k<sub>t</sub>v<sub>t</sub>ᵀ<br>o<sub>t</sub> = q<sub>t</sub>ᵀS<sub>t</sub></div>
+          </li>
+        </ol>
+
+        <div class="shape-grid" aria-label="张量形状">
+          <div class="shape-card"><strong>query / key</strong><span class="shape">qₜ, kₜ : [K]</span></div>
+          <div class="shape-card"><strong>value / output</strong><span class="shape">vₜ, oₜ : [V]</span></div>
+          <div class="shape-card"><strong>rank-1 update</strong><span class="shape">kₜvₜᵀ : [K,V]</span></div>
+          <div class="shape-card"><strong>recurrent state</strong><span class="shape">Sₜ : [K,V]</span></div>
+        </div>
+
+        <div class="callout">
+          <span class="label">关键判断</span>
+          <p>复杂度从显式构造 <code>T×T</code> attention matrix，变成每个 token 更新固定大小的 <code>K×V</code> 状态。但时间维仍然有递推依赖：<code>Sₜ</code> 必须等 <code>Sₜ₋₁</code>。</p>
+        </div>
+      </section>
+
+      <section id="chunk">
+        <h2>2｜把 C 个 token 合成一个 chunk</h2>
+        <p>取连续的 <code>C</code> 个 token，堆叠成：</p>
+        <div class="shape-grid">
+          <div class="shape-card"><strong>Q / K</strong><span class="shape">[C,K]</span></div>
+          <div class="shape-card"><strong>V / O</strong><span class="shape">[C,V]</span></div>
+        </div>
+        <p>这个 chunk 开始前已经有状态 <code>S_in</code>。对 chunk 内第 <code>r</code> 行：</p>
+        <div class="equation">
+          o<sub>r</sub> = q<sub>r</sub>ᵀS<sub>in</sub> + Σ<sub>j≤r</sub>(q<sub>r</sub>ᵀk<sub>j</sub>)v<sub>j</sub>
+        </div>
+
+        <div class="two-column">
+          <div class="shape-card">
+            <strong>Inter-chunk</strong>
+            <p><code>Q·S_in</code></p>
+            <p class="small">来自更早 chunk 的压缩状态。每个 chunk 之间仍有递推依赖。</p>
+          </div>
+          <div class="shape-card">
+            <strong>Intra-chunk</strong>
+            <p><code>((Q·Kᵀ) ⊙ M)·V</code></p>
+            <p class="small">当前 chunk 内的 causal 交互。它变成规则 GEMM，是 GPU 并行化的入口。</p>
+          </div>
+        </div>
+
+        <p>把所有行堆叠起来，就得到本课目标公式：</p>
+        <div class="equation">
+          O = Q·S<sub>in</sub> + ((Q·Kᵀ) ⊙ M)·V
+        </div>
+        <p>chunk 处理完后，所有 <code>C</code> 个 rank-1 update 都进入状态：</p>
+        <div class="equation">
+          S<sub>out</sub> = S<sub>in</sub> + Σ<sub>j=1..C</sub>k<sub>j</sub>v<sub>j</sub>ᵀ
+          = S<sub>in</sub> + Kᵀ·V
+        </div>
+
+        <div class="checkpoint">
+          <span class="label">C = 2 的展开检查</span>
+          <p><code>o₀ = q₀ᵀS_in + (q₀ᵀk₀)v₀</code></p>
+          <p><code>o₁ = q₁ᵀS_in + (q₁ᵀk₀)v₀ + (q₁ᵀk₁)v₁</code></p>
+          <p>下三角 mask 正好删除未来项 <code>(q₀ᵀk₁)v₁</code>。</p>
+        </div>
+
+        <div class="callout">
+          <span class="label">真正的洞察</span>
+          <p><strong>Chunk 没有改变数学语义，它改变的是调度。</strong> 时间维从“每个 token 都串行”变为“chunk 内并行 GEMM、chunk 间递推”。chunk size 是并行度、额外块内计算、状态通信和数值稳定性的折中。</p>
+        </div>
+      </section>
+
+      <section id="code">
+        <h2>3｜把公式翻译成最小 PyTorch</h2>
+        <pre><code>def recurrent_la(q, k, v):
+    # q, k: [T, K]   v: [T, V]
+    T, K = q.shape
+    V = v.shape[-1]
+    state = q.new_zeros(K, V)
+    out = []
+    for t in range(T):
+        state = state + torch.outer(k[t], v[t])
+        out.append(q[t] @ state)
+    return torch.stack(out), state
+
+
+def one_chunk_la(q, k, v, state_in):
+    # q, k: [C, K]   v: [C, V]   state_in: [K, V]
+    C = q.shape[0]
+    mask = torch.tril(torch.ones(C, C, device=q.device))
+    intra = ((q @ k.T) * mask) @ v
+    inter = q @ state_in
+    state_out = state_in + k.T @ v
+    return inter + intra, state_out</code></pre>
+        <p><strong>动手任务：</strong>用随机的 <code>T=8, K=4, V=3, C=4</code> 输入，连续调用两次 <code>one_chunk_la</code>，验证它与 <code>recurrent_la</code> 的 output/final state 一致。</p>
+        <p class="citation">代码语义可继续对照 FLA 的 <a href="https://github.com/fla-org/flash-linear-attention/blob/main/fla/ops/linear_attn/naive.py">naive Linear Attention</a>。理论来源见 Katharopoulos et al., <a href="https://arxiv.org/abs/2006.16236"><em>Transformers are RNNs</em></a>。</p>
+      </section>
+
+      <section id="quiz">
+        <h2>4｜立即检索：别回看公式</h2>
+        <form class="quiz quiz-form">
+          <fieldset class="quiz-question" data-answer="kv" data-explanation="状态累加 k·vᵀ，因此 shape 是 [K,V]。">
+            <legend>1. 单个 head 的 recurrent state 是什么 shape？</legend>
+            <label class="option"><input type="radio" name="q1" value="cv">[C,V]</label>
+            <label class="option"><input type="radio" name="q1" value="kv">[K,V]</label>
+            <label class="option"><input type="radio" name="q1" value="vk">[V,K]</label>
+          </fieldset>
+
+          <fieldset class="quiz-question" data-answer="incoming" data-explanation="Q·S_in 使用的是进入当前 chunk 前已经压缩好的历史状态。">
+            <legend>2. <code>Q·S_in</code> 描述哪一类信息？</legend>
+            <label class="option"><input type="radio" name="q2" value="incoming">进入块的状态</label>
+            <label class="option"><input type="radio" name="q2" value="inside">块内历史状态</label>
+            <label class="option"><input type="radio" name="q2" value="outgoing">离开块的状态</label>
+          </fieldset>
+
+          <fieldset class="quiz-question" data-answer="gemm" data-explanation="chunk 的核心价值是把块内 token 依赖重写成规则矩阵乘；块间递推仍存在。">
+            <legend>3. Chunk form 的主要 GPU 价值是什么？</legend>
+            <label class="option"><input type="radio" name="q3" value="gemm">把串行变成矩阵乘</label>
+            <label class="option"><input type="radio" name="q3" value="double">把精度变成双精度</label>
+            <label class="option"><input type="radio" name="q3" value="zero">把状态变成零矩阵</label>
+          </fieldset>
+
+          <button type="submit">检查答案</button>
+          <p class="feedback" role="status" aria-live="polite"></p>
+        </form>
+      </section>
+
+      <section>
+        <h2>5｜最后一次：空白纸检索</h2>
+        <div class="retrieval">
+          <p><strong>先不要点答案。</strong>在纸上或回复消息写出：</p>
+          <ol>
+            <li>recurrent state update；</li>
+            <li>chunk output 的 inter + intra 分解；</li>
+            <li>chunk final state。</li>
+          </ol>
+          <button type="button" data-reveal-target="retrieval-answer">显示参考答案</button>
+          <div class="reveal" id="retrieval-answer">
+            <p><code>Sₜ = Sₜ₋₁ + kₜvₜᵀ</code></p>
+            <p><code>O = Q·S_in + ((Q·Kᵀ)⊙M)·V</code></p>
+            <p><code>S_out = S_in + Kᵀ·V</code></p>
+          </div>
+        </div>
+        <p>下一课会在这个骨架上加入 scalar decay，推导 GLA/GDN 的 chunk 间衰减与块内相对 decay。任何一步不清楚，都可以直接把你的推导或 shape 发给我，我会逐行反馈。</p>
+      </section>
+    </main>
+
+    <footer class="lesson-footer">
+      <p><strong>主参考：</strong><a href="https://arxiv.org/abs/2006.16236">Transformers are RNNs</a></p>
+      <p><strong>课程使命：</strong><a href="../MISSION.md">独立实现并优化 GDN/KDA prefill kernel</a></p>
+      <p>建议间隔一天后，不看答案再次写出三个核心公式。</p>
+    </footer>
+  </article>
+</body>
+</html>

@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Linear Attention 术语表</title>
+  <link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+  <article class="course-shell">
+    <header class="lesson-header">
+      <p class="eyebrow">Living Glossary</p>
+      <h1>Linear Attention<br>术语表</h1>
+      <p class="deck">后续课程统一使用这些术语和符号。</p>
+    </header>
+    <nav class="lesson-nav">
+      <a href="../lessons/0001-causal-la-to-one-chunk.html">第 1 课</a>
+      <a href="linear-attention-equations.html">公式表</a>
+    </nav>
+    <main>
+      <section>
+        <h2>核心术语</h2>
+        <dl>
+          <dt><strong>Linear Attention（LA）</strong></dt>
+          <dd>利用可结合的 kernel/feature-map 形式，把历史 token 压缩进固定大小状态，避免显式保存完整 <code>T×T</code> attention matrix。</dd>
+
+          <dt><strong>Recurrent form</strong></dt>
+          <dd>按 token 更新状态并立即产生输出的等价表达。时间维串行，适合短序列或 decode。</dd>
+
+          <dt><strong>State（S）</strong></dt>
+          <dd>历史 key/value 的压缩表示。本文 K-first 约定下 shape 为 <code>[K,V]</code>；部分 kernel 使用转置的 V-first <code>[V,K]</code>。</dd>
+
+          <dt><strong>Chunk</strong></dt>
+          <dd>连续的 C 个 token。chunk 内依赖尽量改写成 GEMM，chunk 间通过 state 连接。</dd>
+
+          <dt><strong>Inter-chunk</strong></dt>
+          <dd>当前 chunk 与更早 chunks 之间的交互，例如 vanilla LA 的 <code>Q·S_in</code>。</dd>
+
+          <dt><strong>Intra-chunk</strong></dt>
+          <dd>同一个 chunk 内 token 的因果交互，例如 <code>((QKᵀ)⊙M)V</code>。</dd>
+
+          <dt><strong>Prefill</strong></dt>
+          <dd>一次处理较长 prompt 的阶段，token 并行度高，通常适合 chunk/GEMM/Tensor Core 路径。</dd>
+
+          <dt><strong>Decode</strong></dt>
+          <dd>自回归生成阶段，通常每步只有一个或少量 token，更关注 state 读写、GEMV、launch latency 和 batch 并行度。</dd>
+
+          <dt><strong>Gate / decay</strong></dt>
+          <dd>控制旧状态保留比例的量。GDN 常为每 head 标量；KDA 为每个 key dimension 一个值。</dd>
+
+          <dt><strong>Delta rule</strong></dt>
+          <dd>用当前 value 与状态预测值之间的 residual 做 rank-1 correction，而不是无条件累加 <code>k·vᵀ</code>。</dd>
+
+          <dt><strong>WY representation</strong></dt>
+          <dd>把一组依赖更新改写为块矩阵形式，使 chunk 内 correction 可通过三角求解和 GEMM 计算。后续 GDN/KDA 课程展开。</dd>
+        </dl>
+      </section>
+    </main>
+    <footer class="lesson-footer"><p>该术语表会随课程扩展；发现项目间命名冲突时，以 shape 和公式为最终依据。</p></footer>
+  </article>
+</body>
+</html>

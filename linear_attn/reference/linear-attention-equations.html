@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Linear Attention 公式速查</title>
+  <link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+  <article class="course-shell">
+    <header class="lesson-header">
+      <p class="eyebrow">Quick Reference · Print Friendly</p>
+      <h1>Linear Attention<br>公式速查</h1>
+      <p class="deck">从 causal attention、recurrent state 到一个 chunk 的最小公式集。</p>
+    </header>
+    <nav class="lesson-nav">
+      <a href="../lessons/0001-causal-la-to-one-chunk.html">返回第 1 课</a>
+      <a href="glossary.html">术语表</a>
+      <a href="../RESOURCES.md">资源</a>
+    </nav>
+    <main>
+      <section>
+        <h2>Shape 约定（单 head）</h2>
+        <div class="shape-grid">
+          <div class="shape-card"><strong>Token vectors</strong><span class="shape">q,k:[K] · v,o:[V]</span></div>
+          <div class="shape-card"><strong>Recurrent state</strong><span class="shape">S:[K,V]</span></div>
+          <div class="shape-card"><strong>Chunk inputs</strong><span class="shape">Q,K:[C,K]</span></div>
+          <div class="shape-card"><strong>Chunk values</strong><span class="shape">V,O:[C,V]</span></div>
+        </div>
+      </section>
+
+      <section>
+        <h2>Causal Linear Attention</h2>
+        <div class="equation">o<sub>t</sub> = Σ<sub>i≤t</sub>(q<sub>t</sub>ᵀk<sub>i</sub>)v<sub>i</sub></div>
+        <div class="equation">o<sub>t</sub> = q<sub>t</sub>ᵀ(Σ<sub>i≤t</sub>k<sub>i</sub>v<sub>i</sub>ᵀ)</div>
+      </section>
+
+      <section>
+        <h2>Recurrent form</h2>
+        <div class="equation">S<sub>t</sub> = S<sub>t−1</sub> + k<sub>t</sub>v<sub>t</sub>ᵀ</div>
+        <div class="equation">o<sub>t</sub> = q<sub>t</sub>ᵀS<sub>t</sub></div>
+        <div class="callout"><span class="label">Order matters</span><p>当前 token 的 update 先进入状态，再由 query 读取，才能包含 causal attention 的对角线。</p></div>
+      </section>
+
+      <section>
+        <h2>One-chunk form</h2>
+        <div class="equation">O = Q·S<sub>in</sub> + ((Q·Kᵀ) ⊙ M)·V</div>
+        <div class="equation">S<sub>out</sub> = S<sub>in</sub> + Kᵀ·V</div>
+        <div class="two-column">
+          <div class="shape-card"><strong>Inter</strong><p><code>Q·S_in</code></p><p class="small">过去 chunks 的贡献。</p></div>
+          <div class="shape-card"><strong>Intra</strong><p><code>((Q·Kᵀ)⊙M)·V</code></p><p class="small">当前 chunk 的 causal 贡献。</p></div>
+        </div>
+      </section>
+
+      <section>
+        <h2>Causal mask</h2>
+        <pre><code>C = 4
+M = [[1, 0, 0, 0],
+     [1, 1, 0, 0],
+     [1, 1, 1, 0],
+     [1, 1, 1, 1]]</code></pre>
+      </section>
+
+      <section>
+        <h2>工程判断</h2>
+        <ul>
+          <li>Recurrent：每 token 工作量固定，但时间维串行；适合 decode。</li>
+          <li>Chunk：块内转为 GEMM，块间保留 state recurrence；适合 prefill/training。</li>
+          <li>更大的 C：通常提高 GEMM 规模，但增加块内二次工作和数值压力。</li>
+          <li>GDN/KDA：不推翻这个骨架，而是改变 state transition 与块内 correction。</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>Primary sources</h2>
+        <p class="citation"><a href="https://arxiv.org/abs/2006.16236">Katharopoulos et al., Transformers are RNNs</a></p>
+        <p class="citation"><a href="https://arxiv.org/abs/2312.06635">Yang et al., Gated Linear Attention Transformers with Hardware-Efficient Training</a></p>
+      </section>
+    </main>
+    <footer class="lesson-footer"><p>打印建议：浏览器 Print → A4 → Background graphics off。</p></footer>
+  </article>
+</body>
+</html>
