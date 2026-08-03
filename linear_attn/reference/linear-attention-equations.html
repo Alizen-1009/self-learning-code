@@ -16,6 +16,7 @@
     <nav class="lesson-nav">
       <a href="../lessons/0001-causal-la-to-one-chunk.html">第 1 课</a>
       <a href="../lessons/0002-scalar-decay-to-gated-chunk.html">第 2 课</a>
+      <a href="../lessons/0003-delta-rule-to-wy.html">第 3 课</a>
       <a href="glossary.html">术语表</a>
       <a href="../RESOURCES.md">资源</a>
     </nav>
@@ -74,6 +75,21 @@ M = [[1, 0, 0, 0],
         <div class="equation">O = (Q⊙exp(G))·S<sub>in</sub> + ((QKᵀ)⊙D)·V</div>
         <div class="equation">S<sub>out</sub> = exp(G<sub>last</sub>)·S<sub>in</sub> + (K⊙exp(G<sub>last</sub>−G))ᵀ·V</div>
         <div class="callout"><span class="label">退化检查</span><p>所有 <code>g=0</code> 时，<code>G=0</code>、<code>D=M</code>，回到 vanilla LA。</p></div>
+      </section>
+
+      <section>
+        <h2>Delta Rule（先令 g=0）</h2>
+        <div class="equation">r<sub>t</sub>=β<sub>t</sub>(v<sub>t</sub>−k<sub>t</sub>ᵀS<sub>t−1</sub>)</div>
+        <div class="equation">S<sub>t</sub>=S<sub>t−1</sub>+k<sub>t</sub>r<sub>t</sub>ᵀ</div>
+      </section>
+
+      <section>
+        <h2>Delta chunk / WY-style</h2>
+        <div class="equation">L=tril(KKᵀ,−1), B=diag(β)</div>
+        <div class="equation">T=(I+BL)⁻¹B</div>
+        <div class="equation">U=TV, W=TK, R=U−WS<sub>in</sub></div>
+        <div class="equation">S<sub>out</sub>=(I−KᵀW)S<sub>in</sub>+KᵀU</div>
+        <div class="callout"><span class="label">Mask distinction</span><p>Residual dependency的 L 使用严格下三角；output 的 <code>tril(QKᵀ)</code> 包含对角线。</p></div>
       </section>
 
       <section>

@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="从 Delta Rule recurrence 推导 chunk 内下三角求解与 W/U 表示。">
+  <title>第 3 课｜Delta Rule 为什么需要三角求解</title>
+  <link rel="stylesheet" href="../assets/course.css">
+  <script src="../assets/quiz.js" defer></script>
+</head>
+<body>
+  <article class="course-shell">
+    <header class="lesson-header">
+      <p class="eyebrow">Linear Attention Kernel Course · Lesson 03</p>
+      <h1>Delta Rule<br>为什么需要三角求解</h1>
+      <p class="deck">把逐 token residual 的串行依赖，压缩成一个小型下三角系统；由此得到 FLA 代码中的 <code>w</code>、<code>u</code> 与 WY-style 状态转移。</p>
+      <div class="lesson-meta">
+        <span class="pill">约 22 分钟</span>
+        <span class="pill">GDN 核心</span>
+        <span class="pill">Recurrent → Solve → GEMM</span>
+      </div>
+    </header>
+
+    <nav class="lesson-nav" aria-label="课程导航">
+      <a href="0002-scalar-decay-to-gated-chunk.html">上一课</a>
+      <a href="#recall">回忆</a>
+      <a href="#delta">Delta</a>
+      <a href="#system">三角系统</a>
+      <a href="#wy">W/U</a>
+      <a href="#code">实现</a>
+      <a href="#quiz">检索练习</a>
+      <a href="../reference/linear-attention-equations.html">公式表</a>
+    </nav>
+
+    <main>
+      <section id="recall">
+        <h2>0｜先取回旧模型</h2>
+        <div class="retrieval">
+          <p>Vanilla LA 中，一个 chunk 对状态做什么？</p>
+          <button type="button" data-reveal-target="recall-answer">显示参考答案</button>
+          <div class="reveal" id="recall-answer">
+            <p><code>S_out = S_in + KᵀV</code>。每个 token 无条件写入 <code>kᵢvᵢᵀ</code>，所以所有 value 可以直接堆成一次矩阵乘。</p>
+          </div>
+        </div>
+        <p>Delta Rule 改变的正是“无条件写入”：它先问状态已经预测出了多少，只写入预测误差。</p>
+      </section>
+
+      <section>
+        <h2>本课的可见成果</h2>
+        <div class="objective">
+          <span class="label">完成标准</span>
+          <p>看到 recurrent delta update 后，能独立写出 residual 的下三角线性系统，并解释为什么 <code>R = U − W·S_in</code>。</p>
+        </div>
+        <div class="equation">
+          (I + B·L)·R = B·(V − K·S<sub>in</sub>)<br>
+          R = U − W·S<sub>in</sub>
+          <span class="eq-note">L 是严格下三角 key Gram matrix；B=diag(β)；U=T·V，W=T·K。</span>
+        </div>
+      </section>
+
+      <section id="delta">
+        <h2>1｜Delta Rule 只写预测误差</h2>
+        <p>这一课先令 decay <code>g=0</code>，隔离 delta correction。使用 K-first state <code>S:[K,V]</code>：</p>
+        <div class="equation">
+          p<sub>t</sub> = k<sub>t</sub>ᵀS<sub>t−1</sub><br>
+          r<sub>t</sub> = β<sub>t</sub>·(v<sub>t</sub> − p<sub>t</sub>)<br>
+          S<sub>t</sub> = S<sub>t−1</sub> + k<sub>t</sub>r<sub>t</sub>ᵀ
+        </div>
+        <div class="shape-grid">
+          <div class="shape-card"><strong>prediction</strong><span class="shape">pₜ:[V]</span></div>
+          <div class="shape-card"><strong>residual</strong><span class="shape">rₜ:[V]</span></div>
+          <div class="shape-card"><strong>update rate</strong><span class="shape">βₜ:scalar</span></div>
+          <div class="shape-card"><strong>state update</strong><span class="shape">kₜrₜᵀ:[K,V]</span></div>
+        </div>
+        <p>如果状态已经能从 <code>kₜ</code> 预测出 <code>vₜ</code>，residual 接近 0，就不需要重复写入；如果预测错误，才沿着 key 方向修正。</p>
+
+        <div class="callout">
+          <span class="label">不要混淆 β</span>
+          <p><code>β</code> 是 delta update rate，不是 forget gate。GDN 中通常同时存在 scalar decay <code>exp(g)</code> 和 update rate <code>β</code>。</p>
+        </div>
+      </section>
+
+      <section>
+        <h2>2｜为什么不能再直接写 KᵀV</h2>
+        <p>在 chunk 开始前有 <code>S_in</code>。第一个 residual：</p>
+        <div class="equation">
+          r₀ = β₀·(v₀ − k₀ᵀS<sub>in</sub>)
+        </div>
+        <p>第二个 token 看到的状态已经包含第一个 residual：</p>
+        <div class="equation">
+          r₁ = β₁·(v₁ − k₁ᵀS<sub>in</sub> − (k₁ᵀk₀)r₀)
+        </div>
+        <p>第三个 residual 又依赖 <code>r₀</code> 和 <code>r₁</code>。一般地：</p>
+        <div class="equation">
+          r<sub>i</sub> = β<sub>i</sub>·(v<sub>i</sub> − k<sub>i</sub>ᵀS<sub>in</sub>
+          − Σ<sub>j&lt;i</sub>(k<sub>i</sub>ᵀk<sub>j</sub>)r<sub>j</sub>)
+        </div>
+        <div class="checkpoint">
+          <span class="label">依赖方向</span>
+          <p><code>rᵢ</code> 只依赖更早的 <code>rⱼ, j&lt;i</code>，所以依赖矩阵是<strong>严格下三角</strong>；对角线不在 L 中，因为当前 residual 还没有写入状态。</p>
+        </div>
+      </section>
+
+      <section id="system">
+        <h2>3｜把逐行依赖堆成三角系统</h2>
+        <p>把 chunk 内 residual 堆为 <code>R:[C,V]</code>，并定义：</p>
+        <div class="shape-grid">
+          <div class="shape-card"><strong>update-rate matrix</strong><span class="shape">B=diag(β):[C,C]</span></div>
+          <div class="shape-card"><strong>strict key Gram</strong><span class="shape">L=tril(KKᵀ,−1):[C,C]</span></div>
+        </div>
+        <p>所有逐 token 方程可以一次写成：</p>
+        <div class="equation">
+          R = B·(V − K·S<sub>in</sub> − L·R)
+        </div>
+        <p>把含 R 的项移到左边：</p>
+        <div class="equation">
+          (I + B·L)·R = B·(V − K·S<sub>in</sub>)
+        </div>
+        <p><code>I+B·L</code> 是对角线全 1 的下三角矩阵，因此可以通过 forward substitution / triangular solve 求 R：</p>
+        <div class="equation">
+          T := (I + B·L)<sup>−1</sup>·B<br>
+          R = T·(V − K·S<sub>in</sub>)
+        </div>
+
+        <div class="callout">
+          <span class="label">“逆”不等于真的求通用逆</span>
+          <p>数学上写 inverse 方便推导；实现中应利用下三角结构做 solve、递推展开或有限级数。生产 kernel 不会调用一个通用 dense inverse。</p>
+        </div>
+      </section>
+
+      <section id="wy">
+        <h2>4｜W/U 把 state 依赖分离出来</h2>
+        <p>将 T 分别作用在 value 和 key 上：</p>
+        <div class="equation">
+          U := T·V &nbsp;&nbsp; [C,V]<br>
+          W := T·K &nbsp;&nbsp; [C,K]
+        </div>
+        <p>于是 residual 可以写成：</p>
+        <div class="equation">
+          R = U − W·S<sub>in</sub>
+        </div>
+        <div class="two-column">
+          <div class="shape-card">
+            <strong>U</strong>
+            <p>只依赖当前 chunk 的 K/V/β。</p>
+            <p class="small">可以在不知道 incoming state 时并行预计算。</p>
+          </div>
+          <div class="shape-card">
+            <strong>W</strong>
+            <p>描述 incoming state 如何影响 residual。</p>
+            <p class="small">与 S_in 相乘后得到 chunk 对历史预测的 correction。</p>
+          </div>
+        </div>
+
+        <h3>Chunk final state</h3>
+        <div class="equation">
+          S<sub>out</sub> = S<sub>in</sub> + Kᵀ·R
+        </div>
+        <p>代入 <code>R=U−W·S_in</code>：</p>
+        <div class="equation">
+          S<sub>out</sub> = (I − KᵀW)·S<sub>in</sub> + KᵀU
+        </div>
+        <p>这就是一个 chunk 对 state 的<strong>仿射变换</strong>：左边矩阵负责传播/修正旧状态，右边矩阵负责写入当前 chunk 的新信息。这类紧凑表示常被称为 WY-style representation。</p>
+
+        <h3>Chunk output</h3>
+        <p>令 <code>P=tril(QKᵀ)</code>，这里包含对角线，因为 query 要读取当前 token 更新后的状态：</p>
+        <div class="equation">
+          O = Q·S<sub>in</sub> + P·R<br>
+          = Q·S<sub>in</sub> + P·(U − W·S<sub>in</sub>)
+        </div>
+
+        <div class="callout">
+          <span class="label">Kernel 视角</span>
+          <p>串行 residual recurrence 被拆成 <code>KKᵀ</code>、小三角 solve、<code>TV/TK</code>、<code>W·S</code>、<code>KᵀR</code> 等矩阵操作。这正是 chunk 算法获得 Tensor Core 并行机会的位置。</p>
+        </div>
+      </section>
+
+      <section id="code">
+        <h2>5｜最小 PyTorch reference</h2>
+        <pre><code>def recurrent_delta(q, k, v, beta, state):
+    out = []
+    for t in range(q.shape[0]):
+        residual = beta[t] * (v[t] - k[t] @ state)
+        state = state + torch.outer(k[t], residual)
+        out.append(q[t] @ state)
+    return torch.stack(out), state
+
+
+def one_chunk_delta(q, k, v, beta, state_in):
+    C = q.shape[0]
+    strict = torch.tril(torch.ones(C, C, device=q.device), -1)
+    L = (k @ k.T) * strict
+    B = torch.diag(beta)
+    left = torch.eye(C, device=q.device) + B @ L
+
+    # T = (I + B L)^(-1) B；实现用 triangular solve
+    T = torch.linalg.solve_triangular(left, B, upper=False)
+    U = T @ v
+    W = T @ k
+    R = U - W @ state_in
+
+    P = (q @ k.T) * torch.tril(torch.ones_like(L))
+    out = q @ state_in + P @ R
+    state_out = state_in + k.T @ R
+    return out, state_out</code></pre>
+
+        <div class="objective">
+          <span class="label">动手任务</span>
+          <p>用 <code>T=8, C=4, K=4, V=3</code> 比较 recurrent 与两个 chunk。随后把 <code>L</code> 错改为包含对角线，观察为什么结果不再一致。</p>
+        </div>
+
+        <h3>映射到 FLA</h3>
+        <p>打开 <a href="../code/fla/fla/ops/gated_delta_rule/naive.py"><code>naive_chunk_gated_delta_rule</code></a>，对照：</p>
+        <pre><code>strict lower key Gram     → attn 的初始下三角项
+triangular inverse/solve  → attn 的逐行递推
+U = T @ V                 → k_cumsum / u
+W = T @ K                 → k_cumdecay / w
+R = U - W @ S_in          → v_new
+S_out = ... + K.T @ R     → chunk state update</code></pre>
+        <p>FLA 文件还融合了 scalar decay，所以实际 W/K/Q 带有 <code>exp(G)</code> 的缩放；但三角系统和 <code>R=U−WS</code> 的骨架不变。</p>
+
+        <div class="checkpoint">
+          <span class="label">符号约定警告</span>
+          <p>不同论文/代码可能把负号吸收到 L、A 或 W 中，也可能直接保存 <code>(I+BL)⁻¹</code> 而不是 T。不要靠变量名判断；检查它最终是否满足逐行 residual 方程。</p>
+        </div>
+      </section>
+
+      <section id="quiz">
+        <h2>6｜立即检索</h2>
+        <form class="quiz quiz-form">
+          <fieldset class="quiz-question" data-answer="strict" data-explanation="rᵢ 只依赖已写入状态的更早 residual，所以 key Gram 使用严格下三角。">
+            <legend>1. residual 依赖矩阵 L 应使用哪种 mask？</legend>
+            <label class="option"><input type="radio" name="q1" value="strict">严格下三角矩阵</label>
+            <label class="option"><input type="radio" name="q1" value="inclusive">包含对角线矩阵</label>
+            <label class="option"><input type="radio" name="q1" value="upper">严格上三角矩阵</label>
+          </fieldset>
+
+          <fieldset class="quiz-question" data-answer="residual" data-explanation="U 与 W 的定义就是为了将 R 写成只含 chunk 项 U 和历史状态项 W·S_in。">
+            <legend>2. <code>U − W·S_in</code> 表示什么？</legend>
+            <label class="option"><input type="radio" name="q2" value="residual">块内修正量 R</label>
+            <label class="option"><input type="radio" name="q2" value="output">块内输出量 O</label>
+            <label class="option"><input type="radio" name="q2" value="state">块末状态量 S</label>
+          </fieldset>
+
+          <fieldset class="quiz-question" data-answer="affine" data-explanation="代入 R=U−WS 后，S_out 对 S_in 是矩阵乘加，因此是 affine state transfer。">
+            <legend>3. WY-style 表示把一个 chunk 压缩成什么？</legend>
+            <label class="option"><input type="radio" name="q3" value="affine">状态仿射变换</label>
+            <label class="option"><input type="radio" name="q3" value="scalar">状态标量求和</label>
+            <label class="option"><input type="radio" name="q3" value="random">状态随机采样</label>
+          </fieldset>
+
+          <button type="submit">检查答案</button>
+          <p class="feedback" role="status" aria-live="polite"></p>
+        </form>
+      </section>
+
+      <section>
+        <h2>7｜空白纸检索</h2>
+        <div class="retrieval">
+          <p>不看上文，从逐 token residual 开始写出：</p>
+          <ol>
+            <li>stacked residual equation；</li>
+            <li>三角系统与 T；</li>
+            <li>U、W 和 R；</li>
+            <li>chunk final state 的 affine form。</li>
+          </ol>
+          <button type="button" data-reveal-target="retrieval-answer">显示参考答案</button>
+          <div class="reveal" id="retrieval-answer">
+            <p><code>R = B(V − KS_in − LR)</code></p>
+            <p><code>T = (I+BL)⁻¹B</code></p>
+            <p><code>U=TV, W=TK, R=U−WS_in</code></p>
+            <p><code>S_out=(I−KᵀW)S_in+KᵀU</code></p>
+          </div>
+        </div>
+        <p>下一课将把第 2 课的 scalar decay 与本课的 delta solve 合并，逐行拆解 FLA 的 <code>naive_chunk_gated_delta_rule</code>。如果三角系统的正负号或 shape 不确定，请把你的四行推导发给我。</p>
+      </section>
+    </main>
+
+    <footer class="lesson-footer">
+      <p><strong>主参考：</strong><a href="https://arxiv.org/abs/2412.06464">Gated Delta Networks: Improving Mamba2 with Delta Rule</a></p>
+      <p><strong>代码锚点：</strong><a href="../code/fla/fla/ops/gated_delta_rule/naive.py">FLA naive gated delta rule</a></p>
+      <p>间隔复习时，优先从 C=2 的 r₁ 展开重建整个矩阵式。</p>
+    </footer>
+  </article>
+</body>
+</html>
