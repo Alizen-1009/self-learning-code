@@ -26,7 +26,8 @@
 2. [代码阅读顺序](docs/02-code-reading-map.md)：从 reference 一路读到 Triton、CUTLASS、CuTe DSL。
 3. [优化实验路线](docs/03-optimization-labs.md)：按 correctness → profile → 单变量优化推进。
 4. [cuLA 代码阅读指南](docs/04-cula-reading-map.md)：对照 Hopper/Blackwell 的 CuTe DSL 与 CUTLASS C++ 实现。
-5. [上游版本与许可证](UPSTREAMS.md)：确认代码来源、commit 和更新方法。
+5. [FLA vs FlashInfer GDN Prefill 全流程](docs/05-fla-vs-flashinfer-gdn-prefill.md)：逐步骤对照 multi-kernel 与 SM100/SM103 persistent kernel。
+6. [上游版本与许可证](UPSTREAMS.md)：确认代码来源、commit 和更新方法。
 
 ## 目录结构
 
