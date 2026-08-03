@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="从 grid、chunk loop 和数据驻留理解 FLA 与 FlashInfer SM103 GDN prefill 的并行与串行。">
+  <title>第 5 课｜GDN Prefill 的真实执行图</title>
+  <link rel="stylesheet" href="../assets/course.css">
+  <script src="../assets/quiz.js" defer></script>
+  <script src="../assets/code-highlight.js" defer></script>
+</head>
+<body>
+  <article class="course-shell">
+    <header class="lesson-header">
+      <p class="eyebrow">Linear Attention Kernel Course · Lesson 05</p>
+      <h1>GDN Prefill<br>真实执行图</h1>
+      <p class="deck">不再推公式。只看 grid、chunk loop、H/v_new 和 TMEM，判断 FLA 与 FlashInfer 到底哪里并行、哪里串行。</p>
+      <div class="lesson-meta">
+        <span class="pill">约 18 分钟</span>
+        <span class="pill">FLA vs FlashInfer</span>
+        <span class="pill">Kernel Scheduling</span>
+      </div>
+    </header>
+
+    <nav class="lesson-nav" aria-label="课程导航">
+      <a href="0004-gated-delta-chunk.html">上一课</a>
+      <a href="#rule">判断规则</a>
+      <a href="#fla">FLA</a>
+      <a href="#state">H / v_new</a>
+      <a href="#flashinfer">FlashInfer</a>
+      <a href="#compare">对比</a>
+      <a href="#quiz">检索练习</a>
+      <a href="../reference/gdn-prefill-schedule.html">调度速查</a>
+    </nav>
+
+    <main>
+      <section>
+        <h2>本课的可见成果</h2>
+        <div class="objective">
+          <span class="label">完成标准</span>
+          <p>看到 kernel launch 后，能用两条规则判断 chunk 是否并行；能解释为什么 FLA 保存 H/v_new，而 FlashInfer SM103 通常不保存。</p>
+        </div>
+        <div class="equation">
+          grid 中有 num_chunks → chunks 是不同 GPU programs，可并行<br>
+          kernel 内 for chunk → 同一 program 按 chunk 顺序推进
+        </div>
+      </section>
+
+      <section id="rule">
+        <h2>1｜先学会读调度，而不是读公式</h2>
+        <div class="two-column">
+          <div class="shape-card">
+            <strong>Chunk-parallel</strong>
+            <pre><code class="language-python">grid = (num_chunks, B * H)
+
+kernel[grid](...)</code></pre>
+            <p class="small">chunk id 来自 program/block id；不同 chunks 可同时驻留在不同 SM。</p>
+          </div>
+          <div class="shape-card">
+            <strong>Chunk-serial</strong>
+            <pre><code class="language-python">grid = (B * H,)
+
+for chunk in range(num_chunks):
+    state = update(state, chunk)</code></pre>
+            <p class="small">一个 program/CTA 持有 state，并按顺序处理 chunks。</p>
+          </div>
+        </div>
+        <div class="callout">
+          <span class="label">两个层次</span>
+          <p>“chunks 并行”不表示整个阶段没有依赖：chunk 内的 cumsum/triangular solve 仍有局部顺序。“chunks 串行”也不表示 GPU 只有一个线程：不同 sequence、head、V tile 仍可并行。</p>
+        </div>
+      </section>
+
+      <section id="fla">
+        <h2>2｜FLA：parallel → serial → parallel</h2>
+        <p>用一个固定例子：</p>
+        <div class="shape-grid">
+          <div class="shape-card"><strong>Sequence</strong><span class="shape">T=256</span></div>
+          <div class="shape-card"><strong>Chunk</strong><span class="shape">C=64, NT=4</span></div>
+          <div class="shape-card"><strong>Batch</strong><span class="shape">B=1</span></div>
+          <div class="shape-card"><strong>Heads</strong><span class="shape">H=2</span></div>
+        </div>
+
+        <div class="equation">
+          时间 →<br>
+          Gate&nbsp;&nbsp; [c0][c1][c2][c3]　并行<br>
+          A&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; [c0][c1][c2][c3]　并行<br>
+          W/U&nbsp;&nbsp;&nbsp; [c0][c1][c2][c3]　并行<br>
+          State&nbsp; c0 → c1 → c2 → c3　串行 / head<br>
+          Output [c0][c1][c2][c3]　并行
+        </div>
+
+        <h3>Stage A：gate cumsum</h3>
+        <pre><code class="language-python">grid = (NT, B * H)
+gdn_gate_chunk_cumsum_kernel[grid](...)</code></pre>
+        <p>每个 chunk 独立把自己的 64 个 gate 转成 cumulative gate。四个 chunks 可以同时计算。</p>
+
+        <h3>Stage B：KKT + triangular solve</h3>
+        <pre><code class="language-python">grid = (NT, B * HV)
+chunk_gated_delta_rule_fwd_kkt_solve_kernel[grid](...)</code></pre>
+        <p>每个 chunk 只依赖自己的 K、gate、beta，独立生成 solved matrix A。不同 chunks 并行；单个 chunk 内 solve 有局部下三角依赖。</p>
+
+        <h3>Stage C：W/U</h3>
+        <pre><code class="language-python">grid = (NT, B * HV)
+recompute_w_u_fwd_kernel[grid](...)</code></pre>
+        <p>所有 chunks 独立计算 W/U，因为这一步还不需要知道各 chunk 的 incoming state。</p>
+
+        <h3>Stage D：state recurrence</h3>
+        <pre><code class="language-python">grid = (V_tiles * N * HV,)
+
+for chunk in range(NT):
+    H[chunk] = state
+    R = U[chunk] - W[chunk] @ state
+    v_new[chunk] = R
+    state = decay_and_update(state, K[chunk], R)</code></pre>
+        <p>grid 没有 NT；每个 program 内部循环 NT，所以同一 sequence/head 的 chunks 串行。这是 FLA forward 的 chunk-level 依赖链。</p>
+
+        <h3>Stage E：output</h3>
+        <pre><code class="language-python">grid = (V_tiles, NT, B * HV)
+chunk_fwd_o_kernel[grid](H, v_new, ...)</code></pre>
+        <p>state stage 已准备好每个 chunk 的 H 和 R，所以 output 再次跨 chunks 并行。</p>
+      </section>
+
+      <section id="state">
+        <h2>3｜为什么保存 H 和 v_new？</h2>
+        <div class="two-column">
+          <div class="shape-card">
+            <strong>H[chunk]</strong>
+            <p>当前 chunk 开始前的 state snapshot。</p>
+            <p class="small"><code>H[0]=initial_state</code>；<code>H[1]=chunk0 final state</code>。</p>
+          </div>
+          <div class="shape-card">
+            <strong>v_new[chunk]</strong>
+            <p>当前 chunk 真正写入 state 的 corrected residual R。</p>
+            <p class="small"><code>R=U-W@H</code>；不是原始 V。</p>
+          </div>
+        </div>
+        <p>独立 output kernel 对 chunk c 需要：</p>
+        <div class="equation">
+          inter output ← Q[c] 与 H[c]<br>
+          intra output ← Q/K[c] 与 v_new[c]
+        </div>
+        <p>state program 一旦继续到下一个 chunk，寄存器中的旧 state 会被覆盖。因此必须把每个 chunk 的 incoming state 和 residual 写入 global memory，供所有 output chunks 并行读取。</p>
+
+        <div class="checkpoint">
+          <span class="label">数据流</span>
+          <p><code>state scan → global H/v_new → output kernel</code></p>
+          <p>这增加 HBM 流量，但把 output 从 state recurrence 中解耦，并为训练/backward 保留有用中间量。</p>
+        </div>
+      </section>
+
+      <section id="flashinfer">
+        <h2>4｜FlashInfer SM103：fused streaming chunks</h2>
+        <p>FlashInfer 的主要 grid 是：</p>
+        <div class="equation">persistent CTAs ≈ min(B × H, available clusters)</div>
+        <p>一个 CTA 领取一个 <code>(sequence, head)</code>，把 initial state 加载到 TMEM，然后：</p>
+        <pre><code class="language-python">state = load_initial_state_to_tmem()
+
+for chunk in range(num_chunks):
+    load_and_prefetch_qkv_gate_beta(chunk)
+    compute_kk_qk_and_inverse(chunk)
+    prediction = k_chunk @ state
+    inter = q_chunk @ state
+    residual = corrected_value(chunk, prediction)
+    output_chunk = inter + intra_output(chunk, residual)
+    store_output(output_chunk)
+    state = decay_and_update(state, k_chunk, residual)
+
+store_final_state(state)</code></pre>
+
+        <p>它仍然是 chunk=64 的算法，但 chunk 不在 grid 中，而在 persistent CTA 的内部 loop 中。</p>
+
+        <h3>为什么不保存完整 H？</h3>
+        <p>当前 state 还在 TMEM 时，FlashInfer 已经计算完当前 chunk 的 inter output。无需后续 output kernel 再读取 H。</p>
+
+        <h3>为什么不保存完整 v_new？</h3>
+        <p>corrected residual 产生后，当前 CTA 立即将它用于 intra output 和 state update。无需写入 global tensor 再读回来。</p>
+
+        <h3>它在哪里并行？</h3>
+        <ul>
+          <li>不同 sequence/head 的 persistent CTAs 并行；</li>
+          <li>chunk 内的 7 组 GEMM 使用 Tensor Core/UMMA；</li>
+          <li>12 个 warps 分工完成 TMA load、KK/QK/inverse、state/output、store；</li>
+          <li>多 stage pipeline 重叠当前 chunk 计算和后续 chunk 预取。</li>
+        </ul>
+      </section>
+
+      <section id="compare">
+        <h2>5｜两种 schedule 的直接对比</h2>
+        <div class="two-column">
+          <div class="shape-card">
+            <strong>FLA multi-kernel</strong>
+            <pre><code>parallel local prep
+        ↓
+serial state scan
+        ↓
+parallel output</code></pre>
+            <ul class="small">
+              <li>chunk 维贡献大量 grid parallelism；</li>
+              <li>H/A/W/U/R 经 global memory；</li>
+              <li>容易支持 backward 和通用 shape。</li>
+            </ul>
+          </div>
+          <div class="shape-card">
+            <strong>FlashInfer persistent</strong>
+            <pre><code>CTA owns state
+chunk0 → chunk1 → chunk2
+all work fused per chunk</code></pre>
+            <ul class="small">
+              <li>state 常驻 TMEM；</li>
+              <li>不物化完整 H/W/U/R；</li>
+              <li>依赖 B×H 提供 CTA 并行度。</li>
+            </ul>
+          </div>
+        </div>
+
+        <table class="matrix-table" aria-label="FLA 与 FlashInfer 调度对比">
+          <tr><td>维度</td><td>FLA</td><td>FlashInfer</td></tr>
+          <tr><td>chunk local prep</td><td>跨 chunk 并行</td><td>CTA 内逐 chunk</td></tr>
+          <tr><td>state recurrence</td><td>program 内逐 chunk</td><td>CTA 内逐 chunk</td></tr>
+          <tr><td>output</td><td>跨 chunk 并行 kernel</td><td>当前 chunk 立即完成</td></tr>
+          <tr><td>state 驻留</td><td>寄存器 + HBM H</td><td>TMEM 跨 chunks</td></tr>
+          <tr><td>主要中间量</td><td>G/A/W/U/H/R</td><td>片上复用 buffer</td></tr>
+          <tr><td>主要目标</td><td>通用训练实现</td><td>特化 inference forward</td></tr>
+        </table>
+      </section>
+
+      <section>
+        <h2>6｜源码阅读练习</h2>
+        <div class="objective">
+          <span class="label">FLA</span>
+          <p>打开 <a href="../code/fla/fla/ops/gated_delta_rule/chunk.py"><code>chunk.py</code></a>，为每个调用标记：grid 是否有 NT？是否生成 global intermediate？</p>
+        </div>
+        <div class="objective">
+          <span class="label">FlashInfer</span>
+          <p>打开 <a href="../code/flashinfer/flashinfer/gdn_kernels/blackwell/gated_delta_net_tile_scheduler.py"><code>tile_scheduler.py</code></a> 和 <a href="../code/flashinfer/flashinfer/gdn_kernels/blackwell/gated_delta_net_chunked.py"><code>gated_delta_net_chunked.py</code></a>，找到 `(batch,head)` tile 与内部 chunk loop。</p>
+        </div>
+        <p>完整逐步骤参考：<a href="../docs/05-fla-vs-flashinfer-gdn-prefill.md">FLA vs FlashInfer GDN Prefill 全流程</a>。</p>
+      </section>
+
+      <section id="quiz">
+        <h2>7｜立即检索</h2>
+        <form class="quiz quiz-form">
+          <fieldset class="quiz-question" data-answer="state" data-explanation="FLA 只有 state recurrence 的 grid 不含 NT，并在 program 内循环 chunks。">
+            <legend>1. FLA 哪个阶段在 chunk 维串行？</legend>
+            <label class="option"><input type="radio" name="q1" value="state">状态传播阶段</label>
+            <label class="option"><input type="radio" name="q1" value="gate">门控扫描阶段</label>
+            <label class="option"><input type="radio" name="q1" value="output">局部输出阶段</label>
+          </fieldset>
+
+          <fieldset class="quiz-question" data-answer="inter" data-explanation="H 是 chunk incoming state，独立 output kernel 用它计算 Q 与历史 state 的 inter contribution。">
+            <legend>2. FLA 保存 H[chunk] 的直接用途是什么？</legend>
+            <label class="option"><input type="radio" name="q2" value="inter">计算历史输出</label>
+            <label class="option"><input type="radio" name="q2" value="gate">计算门控激活</label>
+            <label class="option"><input type="radio" name="q2" value="index">计算序列索引</label>
+          </fieldset>
+
+          <fieldset class="quiz-question" data-answer="fused" data-explanation="FlashInfer 在 state 仍在 TMEM 时立即完成当前 chunk output 和 state update。">
+            <legend>3. FlashInfer 为什么通常不保存完整 H/v_new？</legend>
+            <label class="option"><input type="radio" name="q3" value="fused">当前块立即消费</label>
+            <label class="option"><input type="radio" name="q3" value="unused">这些数据无作用</label>
+            <label class="option"><input type="radio" name="q3" value="constant">这些数据是常量</label>
+          </fieldset>
+
+          <button type="submit">检查答案</button>
+          <p class="feedback" role="status" aria-live="polite"></p>
+        </form>
+      </section>
+
+      <section>
+        <h2>8｜空白纸检索</h2>
+        <div class="retrieval">
+          <p>不用公式，画出两条时间线：</p>
+          <ol>
+            <li>FLA：local prep → state scan → output；</li>
+            <li>FlashInfer：persistent CTA 内逐 chunk fused。</li>
+          </ol>
+          <button type="button" data-reveal-target="retrieval-answer">显示参考答案</button>
+          <div class="reveal" id="retrieval-answer">
+            <pre><code>FLA
+[c0 c1 c2 c3] local prep
+ c0→c1→c2→c3  state
+[c0 c1 c2 c3] output
+
+FlashInfer
+CTA(seq,head): c0(all)→c1(all)→c2(all)→c3(all)</code></pre>
+          </div>
+        </div>
+        <p>下一步进入实现前，请先回答：你的目标 GPU 和测试环境是什么？我们将据此选择 Triton baseline 的 shape、dtype 和 benchmark。</p>
+      </section>
+    </main>
+
+    <footer class="lesson-footer">
+      <p><strong>FLA source：</strong><a href="../code/fla/fla/ops/gated_delta_rule/chunk.py">chunk_gated_delta_rule_fwd</a></p>
+      <p><strong>FlashInfer source：</strong><a href="../code/flashinfer/flashinfer/gdn_kernels/blackwell/gated_delta_net_chunked.py">GatedDeltaNetChunkedKernel</a></p>
+      <p>记忆口诀：FLA 是 parallel–serial–parallel；FlashInfer 是 CTA 持 state、逐 chunk 全融合。</p>
+    </footer>
+  </article>
+</body>
+</html>

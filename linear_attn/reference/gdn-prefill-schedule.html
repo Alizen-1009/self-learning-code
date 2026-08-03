@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GDN Prefill 调度速查</title>
+  <link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+  <article class="course-shell">
+    <header class="lesson-header">
+      <p class="eyebrow">Quick Reference · Scheduling</p>
+      <h1>GDN Prefill<br>调度速查</h1>
+      <p class="deck">从 grid、chunk loop 和数据驻留快速判断 FLA/FlashInfer 的并行策略。</p>
+    </header>
+    <nav class="lesson-nav">
+      <a href="../lessons/0005-gdn-prefill-execution-map.html">第 5 课</a>
+      <a href="../docs/05-fla-vs-flashinfer-gdn-prefill.md">详细对比</a>
+      <a href="glossary.html">术语表</a>
+    </nav>
+    <main>
+      <section>
+        <h2>判断规则</h2>
+        <div class="equation">grid 含 NT → chunks 可并行<br>program 内 for NT → chunks 串行</div>
+      </section>
+
+      <section>
+        <h2>FLA</h2>
+        <pre><code>Gate       grid=(NT, B×H)          parallel chunks
+KKT/Solve  grid=(NT, B×HV)         parallel chunks
+W/U        grid=(NT, B×HV)         parallel chunks
+State      grid=(Vtiles×N×HV,)     for chunk: serial
+Output     grid=(Vtiles,NT,B×HV)   parallel chunks</code></pre>
+        <div class="equation">parallel local prep → serial state scan → parallel output</div>
+        <ul>
+          <li><code>H[c]</code>：chunk c incoming state；</li>
+          <li><code>v_new[c]</code>：chunk c corrected residual；</li>
+          <li>两者写 global memory，供独立 output kernel 使用。</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>FlashInfer SM100/SM103</h2>
+        <pre><code>persistent grid ≈ min(B×H, clusters)
+
+CTA(sequence, head):
+    load state → TMEM
+    for chunk:
+        local prep + output + state update
+    store final state</code></pre>
+        <ul>
+          <li>chunk=64，但 chunk 不在 grid 中；</li>
+          <li>state 跨 chunks 常驻 TMEM；</li>
+          <li>不物化完整 global H/W/U/v_new；</li>
+          <li>依赖 B×H 提供 CTA 并行度。</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>选择</h2>
+        <table class="matrix-table">
+          <tr><td>场景</td><td>更自然的设计</td></tr>
+          <tr><td>训练 / backward</td><td>FLA multi-kernel</td></tr>
+          <tr><td>通用 shape/backend</td><td>FLA multi-kernel</td></tr>
+          <tr><td>D=128 Blackwell inference</td><td>FlashInfer persistent</td></tr>
+          <tr><td>B×H 足够大</td><td>FlashInfer 易填满 GPU</td></tr>
+          <tr><td>B×H 很小、T 很长</td><td>需评估 chunk/CP parallel</td></tr>
+        </table>
+      </section>
+    </main>
+    <footer class="lesson-footer"><p>核心：算法都有 chunk；差别是 chunk 是否进入 grid，以及 state 在 HBM 还是 TMEM 跨 chunk 传播。</p></footer>
+  </article>
+</body>
+</html>
