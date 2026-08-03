@@ -1,0 +1,6 @@
+# Disposable clone/staging directories used by refresh_curated_sources.py.
+.source-refresh-*/
+.code-refresh-backup/
+
+__pycache__/
+*.pyc

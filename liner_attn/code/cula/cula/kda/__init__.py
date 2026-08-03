@@ -1,0 +1,64 @@
+# Copyright 2025-2026 Ant Group Co., Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Public KDA API exports for chunk, prefill, and decode"""
+
+__all__ = [
+    "chunk_kda",
+    "kda_decode",
+    "kda_decode_mtp",
+    "kda_decode_mtp_recurrent",
+    "kda_decode_mtp_recurrent_ws",
+    "kda_packed_decode",
+    "fused_sigmoid_gating_delta_rule_update",
+    "kda_prefill_hopper",
+    "kda_prefill_hopper_opt",
+    "kda_prefill_hopper_auto",
+    "flashkda_prefill",
+    "kda_prefill",
+]
+
+_LAZY = {
+    "chunk_kda": ("cula.kda.chunk", "chunk_kda"),
+    "kda_prefill_hopper": ("cula.kda.hopper_fused_fwd", "cula_kda_prefill"),
+    "kda_prefill_hopper_opt": ("cula.kda.hopper_fused_fwd_opt", "cula_kda_prefill_opt"),
+    "kda_prefill_hopper_auto": ("cula.kda.auto_route", "cula_kda_prefill_auto"),
+    "flashkda_prefill": ("cula.kda.flashkda", "cula_kda_prefill"),
+    "kda_prefill": ("cula.kda.backends", "kda_prefill"),
+    "kda_decode": ("cula.ops.kda.decode.cute", "kda_decode"),
+    "kda_decode_mtp": ("cula.ops.kda.decode.mtp", "kda_decode_mtp"),
+    "kda_decode_mtp_recurrent": ("cula.ops.kda.decode.mtp", "kda_decode_mtp_recurrent"),
+    "kda_decode_mtp_recurrent_ws": (
+        "cula.ops.kda.decode.mtp",
+        "kda_decode_mtp_recurrent_ws",
+    ),
+    "kda_packed_decode": ("cula.ops.kda.decode.cute", "kda_packed_decode"),
+    "fused_sigmoid_gating_delta_rule_update": (
+        "cula.ops.kda.decode.cute",
+        "fused_sigmoid_gating_delta_rule_update",
+    ),
+}
+
+
+def __getattr__(name):
+    target = _LAZY.get(name)
+    if target is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    import importlib
+
+    return getattr(importlib.import_module(target[0]), target[1])
+
+
+def __dir__():
+    return sorted(__all__)

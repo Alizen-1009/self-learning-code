@@ -1,0 +1,90 @@
+
+[build-system]
+requires = ["setuptools>=61", "wheel", "setuptools_scm>=6.0", "torch"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cuda-linear-attention"
+dynamic = ["version"]
+description = "cuLA CUDA extension"
+readme = "README.md"
+authors = [ { name = "cula contributors" } ]
+requires-python = ">=3.10"
+dependencies = [
+    "nvidia-cutlass-dsl>=4.4.2,<4.7,!=4.5.0",
+    "apache-tvm-ffi>=0.1.9",
+    "packaging>=23.2",
+]
+license = { text = "Apache-2.0" }
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "matplotlib",
+    "pandas",
+    "build",
+    "twine",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["cula", "cula.*"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 127
+exclude = [
+    "csrc/",
+    "third_party/",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle
+    "F",    # Pyflakes
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "SIM",  # flake8-simplify
+    "I",    # isort
+    "C4",   # flake8-comprehensions
+    "TCH",  # flake8-type-checking
+    "T",    # flake8-debugger
+]
+ignore = [
+    "E501",
+    "E741",
+    "B023",
+    "B006",
+    "B007",
+    "B008",
+    "B028",
+    "B904",
+    "B905",
+    "C408",
+    "C416",
+    "C417",
+    "T201",
+    "TC002",
+    "TC003",
+    "SIM102",
+    "SIM108",
+    "SIM118",
+    "SIM211",
+    "COM812",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["cula"]
+force-sort-within-sections = false
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"cula/_version.py" = ["UP007"]
+# TODO: fix undefined names (exp_g, chunk_kda_bwd_dqkwg) — WIP code
+"cula/ops/kda/experimental/sm100_fused/kda_fully_fused_wip.py" = ["F821"]
+"cula/ops/kda/experimental/sm100_fused/wrapper.py" = ["F821"]
+
+[tool.setuptools_scm]
+write_to = "cula/_version.py"
+local_scheme = "no-local-version"
+fallback_version = "0.1.0"
