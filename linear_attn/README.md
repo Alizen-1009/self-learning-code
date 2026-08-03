@@ -16,8 +16,9 @@
 2. [第 1 课：从 Causal LA 到一个 Chunk](lessons/0001-causal-la-to-one-chunk.html)
 3. [第 2 课：Scalar Decay 如何进入 Chunk](lessons/0002-scalar-decay-to-gated-chunk.html)
 4. [第 3 课：Delta Rule 为什么需要三角求解](lessons/0003-delta-rule-to-wy.html)
-5. [公式速查表](reference/linear-attention-equations.html)
-6. [可信资源](RESOURCES.md)
+5. [第 4 课：完整拼出 Gated Delta Chunk](lessons/0004-gated-delta-chunk.html)
+6. [公式速查表](reference/linear-attention-equations.html)
+7. [可信资源](RESOURCES.md)
 
 ### 原有阅读指南
 

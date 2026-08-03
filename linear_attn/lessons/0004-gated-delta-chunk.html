@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="合并 scalar decay 与 delta rule，完整推导 Gated Delta Rule chunk forward 并映射到 FLA naive 实现。">
+  <title>第 4 课｜完整拼出 Gated Delta Chunk</title>
+  <link rel="stylesheet" href="../assets/course.css">
+  <script src="../assets/quiz.js" defer></script>
+</head>
+<body>
+  <article class="course-shell">
+    <header class="lesson-header">
+      <p class="eyebrow">Linear Attention Kernel Course · Lesson 04</p>
+      <h1>完整拼出<br>Gated Delta Chunk</h1>
+      <p class="deck">把 scalar decay 与 delta triangular solve 合并，逐行读懂 FLA 的 <code>naive_chunk_gated_delta_rule</code>。</p>
+      <div class="lesson-meta">
+        <span class="pill">约 25 分钟</span>
+        <span class="pill">GDN Chunk Forward</span>
+        <span class="pill">公式 ↔ FLA 源码</span>
+      </div>
+    </header>
+
+    <nav class="lesson-nav" aria-label="课程导航">
+      <a href="0003-delta-rule-to-wy.html">上一课</a>
+      <a href="#recurrence">递推</a>
+      <a href="#solve">加权 solve</a>
+      <a href="#output">输出与状态</a>
+      <a href="#fla">FLA 映射</a>
+      <a href="#quiz">检索练习</a>
+      <a href="../reference/linear-attention-equations.html">公式表</a>
+    </nav>
+
+    <main>
+      <section>
+        <h2>本课的可见成果</h2>
+        <div class="objective">
+          <span class="label">完成标准</span>
+          <p>能拿着 FLA naive GDN 的代码，指出 <code>G</code>、weighted Gram、triangular inverse、<code>U/W/R</code>、inter/intra output 和 final state。</p>
+        </div>
+        <div class="equation">
+          R = U − W·S<sub>in</sub><br>
+          O = Q<sub>g</sub>·S<sub>in</sub> + P·R<br>
+          S<sub>out</sub> = exp(G<sub>last</sub>)S<sub>in</sub> + K<sub>end</sub>ᵀR
+          <span class="eq-note">今天的任务是为 U、W、P、Q_g、K_end 建立唯一、可追踪的来源。</span>
+        </div>
+      </section>
+
+      <section id="recurrence">
+        <h2>1｜一个 token 的执行顺序</h2>
+        <p>Gated Delta Rule 对每个 token 做四步：</p>
+        <ol class="steps">
+          <li><strong>Decay：</strong><code>S̄ₜ = exp(gₜ)·Sₜ₋₁</code></li>
+          <li><strong>Predict：</strong><code>pₜ = kₜᵀS̄ₜ</code></li>
+          <li><strong>Correct：</strong><code>rₜ = βₜ(vₜ−pₜ)</code></li>
+          <li><strong>Write / Read：</strong><code>Sₜ=S̄ₜ+kₜrₜᵀ</code>，<code>oₜ=qₜᵀSₜ</code></li>
+        </ol>
+        <div class="callout">
+          <span class="label">顺序决定公式</span>
+          <p>先 decay，再用衰减后的状态预测；当前 residual 写入后，query 才读取输出。因此 residual 依赖使用严格下三角，而 output interaction 包含对角线。</p>
+        </div>
+
+        <h3>在 chunk 内展开衰减</h3>
+        <p>定义 cumulative log-decay：</p>
+        <div class="equation">G<sub>i</sub> := Σ<sub>m=0..i</sub>g<sub>m</sub></div>
+        <p>token i 在写入自身 residual 前看到的状态：</p>
+        <div class="equation">
+          S̄<sub>i</sub> = exp(G<sub>i</sub>)S<sub>in</sub>
+          + Σ<sub>j&lt;i</sub>exp(G<sub>i</sub>−G<sub>j</sub>)k<sub>j</sub>r<sub>j</sub>ᵀ
+        </div>
+        <p>所以 residual 为：</p>
+        <div class="equation">
+          r<sub>i</sub> = β<sub>i</sub>[v<sub>i</sub> − exp(G<sub>i</sub>)k<sub>i</sub>ᵀS<sub>in</sub>
+          − Σ<sub>j&lt;i</sub>exp(G<sub>i</sub>−G<sub>j</sub>)(k<sub>i</sub>ᵀk<sub>j</sub>)r<sub>j</sub>]
+        </div>
+      </section>
+
+      <section id="solve">
+        <h2>2｜Decay 进入严格下三角 Gram</h2>
+        <p>定义两个 mask：</p>
+        <div class="two-column">
+          <div class="shape-card"><strong>M&lt;</strong><p><code>1[j&lt;i]</code></p><p class="small">residual 依赖；严格下三角。</p></div>
+          <div class="shape-card"><strong>M≤</strong><p><code>1[j≤i]</code></p><p class="small">output 读取；包含对角线。</p></div>
+        </div>
+        <p>相对衰减矩阵仍是 <code>exp(Gᵢ−Gⱼ)</code>。将它乘到 key Gram：</p>
+        <div class="equation">
+          L<sub>ij</sub> := 1[j&lt;i]·exp(G<sub>i</sub>−G<sub>j</sub>)·(k<sub>i</sub>ᵀk<sub>j</sub>)
+        </div>
+        <p>再定义按 token 行缩放的 key：</p>
+        <div class="equation">K<sub>g</sub> := K ⊙ exp(G) &nbsp;&nbsp; [C,K]</div>
+        <p>因为第 i 行的 incoming-state prediction 是：</p>
+        <div class="equation">exp(G<sub>i</sub>)k<sub>i</sub>ᵀS<sub>in</sub> = (K<sub>g</sub>S<sub>in</sub>)<sub>i</sub></div>
+
+        <h3>堆叠 residual</h3>
+        <p>令 <code>B=diag(β)</code>，就得到：</p>
+        <div class="equation">
+          R = B·(V − K<sub>g</sub>S<sub>in</sub> − L·R)
+        </div>
+        <div class="equation">
+          (I+B·L)R = B(V−K<sub>g</sub>S<sub>in</sub>)
+        </div>
+        <p>定义：</p>
+        <div class="equation">
+          A<sup>−1</sup> := (I+B·L)<sup>−1</sup><br>
+          T := A<sup>−1</sup>B
+        </div>
+        <p>然后：</p>
+        <div class="equation">
+          U := T·V<br>
+          W := T·K<sub>g</sub><br>
+          R = U − W·S<sub>in</sub>
+        </div>
+
+        <div class="checkpoint">
+          <span class="label">为什么 FLA 看起来少了 B？</span>
+          <p>FLA 先计算 <code>v ← βV</code>、<code>k_beta ← βK</code>，再用 <code>A⁻¹</code> 左乘。因此 <code>A⁻¹(βV)=TV=U</code>，<code>A⁻¹(βK_g)=TK_g=W</code>。β 被预先折叠进输入了。</p>
+        </div>
+      </section>
+
+      <section id="output">
+        <h2>3｜Output 与 final state 使用不同权重</h2>
+        <h3>Output：每一行衰减到自己的位置</h3>
+        <p>定义包含对角线的 weighted QK matrix：</p>
+        <div class="equation">
+          P<sub>ij</sub> := 1[j≤i]·exp(G<sub>i</sub>−G<sub>j</sub>)·(q<sub>i</sub>ᵀk<sub>j</sub>)
+        </div>
+        <p>同时，incoming state 对第 i 个 query 衰减了 <code>exp(Gᵢ)</code>，定义：</p>
+        <div class="equation">Q<sub>g</sub> := Q ⊙ exp(G)</div>
+        <p>于是：</p>
+        <div class="equation">
+          O = Q<sub>g</sub>S<sub>in</sub> + P·R
+          = Q<sub>g</sub>S<sub>in</sub> + P(U−WS<sub>in</sub>)
+        </div>
+
+        <h3>Final state：所有更新都衰减到 chunk 末尾</h3>
+        <p>定义：</p>
+        <div class="equation">
+          K<sub>end,j</sub> := exp(G<sub>last</sub>−G<sub>j</sub>)k<sub>j</sub>
+        </div>
+        <p>则：</p>
+        <div class="equation">
+          S<sub>out</sub> = exp(G<sub>last</sub>)S<sub>in</sub> + K<sub>end</sub>ᵀR
+        </div>
+        <p>代入 WY residual：</p>
+        <div class="equation">
+          S<sub>out</sub> = [exp(G<sub>last</sub>)I − K<sub>end</sub>ᵀW]S<sub>in</sub>
+          + K<sub>end</sub>ᵀU
+        </div>
+        <div class="callout">
+          <span class="label">一个 chunk = 一个 affine transfer</span>
+          <p>即使加入 scalar decay 和 delta correction，chunk 对 incoming state 仍可写成 <code>S_out = M_state·S_in + B_state</code>。这为 chunk scan、Context Parallel 和 kernel 分阶段提供了基础。</p>
+        </div>
+      </section>
+
+      <section id="fla">
+        <h2>4｜逐行映射 FLA naive 实现</h2>
+        <p>打开本地 <a href="../code/fla/fla/ops/gated_delta_rule/naive.py"><code>naive_chunk_gated_delta_rule</code></a>，按下面顺序阅读。</p>
+
+        <h3>① 预处理 β 与 chunk cumsum</h3>
+        <pre><code>v = v * beta[..., None]               # βV
+k_beta = k * beta[..., None]           # βK
+decay = decay.cumsum(-1)               # G
+L_mask = exp(G_i - G_j).tril()         # relative decay × M≤</code></pre>
+
+        <h3>② 构造严格下三角依赖并求 A⁻¹</h3>
+        <pre><code>attn = -((k_beta @ k.T) * L_mask)
+attn = attn.masked_fill(diagonal_and_upper, 0)
+
+# 逐行累积严格下三角 inverse
+for i in range(1, chunk_size):
+    attn[i, :i] += ...
+
+attn = attn + I                        # A⁻¹</code></pre>
+        <p>代码把负号吸收进 inverse recurrence；不要仅凭 <code>attn</code> 名字判断它是普通 attention score。</p>
+
+        <h3>③ 准备 U/W</h3>
+        <pre><code>U = attn @ (beta * V)                  # k_cumsum
+W = attn @ (beta * exp(G) * K)         # k_cumdecay</code></pre>
+
+        <h3>④ 注入 incoming state，得到真正 residual</h3>
+        <pre><code>prediction = W @ S_in                  # v_prime
+R = U - prediction                     # v_new</code></pre>
+
+        <h3>⑤ 计算 output 与 final state</h3>
+        <pre><code>P = tril((Q @ K.T) * exp(G_i - G_j))
+O = (Q * exp(G)) @ S_in + P @ R
+
+K_end = K * exp(G_last - G)
+S_out = exp(G_last) * S_in + K_end.T @ R</code></pre>
+
+        <div class="objective">
+          <span class="label">源码练习</span>
+          <p>在不修改上游快照的前提下，把 FLA naive 函数复制到练习文件，将变量临时重命名为 <code>G/Ainv/U/W/R/P/K_end</code>，验证输出不变。这个练习的目标是建立符号与代码的双向映射。</p>
+        </div>
+      </section>
+
+      <section>
+        <h2>5｜最小 PyTorch 公式骨架</h2>
+        <pre><code>def one_chunk_gated_delta(q, k, v, g, beta, state_in):
+    C = q.shape[0]
+    G = g.cumsum(0)
+    strict = torch.tril(torch.ones(C, C, device=q.device), -1)
+    causal = torch.tril(torch.ones(C, C, device=q.device))
+    rel = (G[:, None] - G[None, :]).exp()
+
+    L = (k @ k.T) * rel * strict
+    B = torch.diag(beta)
+    A = torch.eye(C, device=q.device) + B @ L
+    Ainv = torch.linalg.solve_triangular(
+        A, torch.eye(C, device=q.device), upper=False
+    )
+
+    U = Ainv @ (beta[:, None] * v)
+    Kg = k * G.exp()[:, None]
+    W = Ainv @ (beta[:, None] * Kg)
+    R = U - W @ state_in
+
+    P = (q @ k.T) * rel * causal
+    Qg = q * G.exp()[:, None]
+    out = Qg @ state_in + P @ R
+
+    Kend = k * (G[-1] - G).exp()[:, None]
+    state_out = G[-1].exp() * state_in + Kend.T @ R
+    return out, state_out</code></pre>
+        <p>这不是性能实现，而是 correctness oracle。进入 Triton 前，必须先让它与逐 token recurrent 在 full chunk、tail chunk、initial state、极端 gate 上一致。</p>
+
+        <div class="callout">
+          <span class="label">数值与性能伏笔</span>
+          <p>实际 kernel 会避免显式保存多个 <code>C×C</code> 矩阵，可能把 <code>exp</code> 转为 <code>exp2</code>，并使用局部 offset 控制范围。FlashKDA 选择 chunk=16，也与 gate 数值范围和小三角 inverse 成本直接相关。</p>
+        </div>
+      </section>
+
+      <section id="quiz">
+        <h2>6｜立即检索</h2>
+        <form class="quiz quiz-form">
+          <fieldset class="quiz-question" data-answer="kg" data-explanation="incoming state 在位置 i 已衰减 exp(Gᵢ)，所以 prediction 使用 K_g=K⊙exp(G)。">
+            <legend>1. W 应该由 T 乘哪个 key 得到？</legend>
+            <label class="option"><input type="radio" name="q1" value="raw">原始键矩阵 K</label>
+            <label class="option"><input type="radio" name="q1" value="kg">衰减键矩阵 K_g</label>
+            <label class="option"><input type="radio" name="q1" value="end">末端键矩阵 K_e</label>
+          </fieldset>
+
+          <fieldset class="quiz-question" data-answer="strict" data-explanation="residual i 只能依赖 j&lt;i，因此 L 使用严格下三角；P 才包含对角线。">
+            <legend>2. Weighted key Gram L 使用什么 mask？</legend>
+            <label class="option"><input type="radio" name="q2" value="strict">严格下三角 M&lt;</label>
+            <label class="option"><input type="radio" name="q2" value="causal">含对角三角 M≤</label>
+            <label class="option"><input type="radio" name="q2" value="upper">严格上三角 M&gt;</label>
+          </fieldset>
+
+          <fieldset class="quiz-question" data-answer="residual" data-explanation="U 只含当前 chunk，W·S_in 是 incoming state prediction；两者之差才是 R。">
+            <legend>3. FLA 中的 <code>v_new = U − W·S</code> 实际是什么？</legend>
+            <label class="option"><input type="radio" name="q3" value="residual">块内残差矩阵 R</label>
+            <label class="option"><input type="radio" name="q3" value="output">块内输出矩阵 O</label>
+            <label class="option"><input type="radio" name="q3" value="state">块末状态矩阵 S</label>
+          </fieldset>
+
+          <button type="submit">检查答案</button>
+          <p class="feedback" role="status" aria-live="polite"></p>
+        </form>
+      </section>
+
+      <section>
+        <h2>7｜空白纸检索</h2>
+        <div class="retrieval">
+          <p>从 token recurrence 开始，不看上文写出：</p>
+          <ol>
+            <li>weighted strict Gram L；</li>
+            <li>三角系统、U/W/R；</li>
+            <li>weighted output P 与 Q_g；</li>
+            <li>K_end 与 final state。</li>
+          </ol>
+          <button type="button" data-reveal-target="retrieval-answer">显示参考答案</button>
+          <div class="reveal" id="retrieval-answer">
+            <p><code>Lᵢⱼ=1[j&lt;i]exp(Gᵢ−Gⱼ)kᵢᵀkⱼ</code></p>
+            <p><code>T=(I+BL)⁻¹B; U=TV; W=T(K⊙exp(G)); R=U−WS_in</code></p>
+            <p><code>Pᵢⱼ=1[j≤i]exp(Gᵢ−Gⱼ)qᵢᵀkⱼ; O=(Q⊙exp(G))S_in+PR</code></p>
+            <p><code>K_end=K⊙exp(G_last−G); S_out=exp(G_last)S_in+K_endᵀR</code></p>
+          </div>
+        </div>
+        <p>下一课将从公式转向工程：把整个 chunk forward 分成可实现的 kernel stages，并为第一个 Triton correctness baseline 设计接口、grid 和测试矩阵。</p>
+      </section>
+    </main>
+
+    <footer class="lesson-footer">
+      <p><strong>主参考：</strong><a href="https://arxiv.org/abs/2412.06464">Gated Delta Networks: Improving Mamba2 with Delta Rule</a></p>
+      <p><strong>代码锚点：</strong><a href="../code/fla/fla/ops/gated_delta_rule/naive.py">FLA naive chunk gated delta rule</a></p>
+      <p>如果只能记一件事：decay 改写 L/P/K_g/K_end 的权重，delta solve 保持 R=U−WS 的骨架。</p>
+    </footer>
+  </article>
+</body>
+</html>

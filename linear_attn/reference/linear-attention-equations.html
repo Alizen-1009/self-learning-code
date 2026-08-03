@@ -17,6 +17,7 @@
       <a href="../lessons/0001-causal-la-to-one-chunk.html">第 1 课</a>
       <a href="../lessons/0002-scalar-decay-to-gated-chunk.html">第 2 课</a>
       <a href="../lessons/0003-delta-rule-to-wy.html">第 3 课</a>
+      <a href="../lessons/0004-gated-delta-chunk.html">第 4 课</a>
       <a href="glossary.html">术语表</a>
       <a href="../RESOURCES.md">资源</a>
     </nav>
@@ -90,6 +91,16 @@ M = [[1, 0, 0, 0],
         <div class="equation">U=TV, W=TK, R=U−WS<sub>in</sub></div>
         <div class="equation">S<sub>out</sub>=(I−KᵀW)S<sub>in</sub>+KᵀU</div>
         <div class="callout"><span class="label">Mask distinction</span><p>Residual dependency的 L 使用严格下三角；output 的 <code>tril(QKᵀ)</code> 包含对角线。</p></div>
+      </section>
+
+      <section>
+        <h2>Gated Delta chunk</h2>
+        <div class="equation">G<sub>i</sub>=Σ<sub>m≤i</sub>g<sub>m</sub></div>
+        <div class="equation">L<sub>ij</sub>=1[j&lt;i]exp(G<sub>i</sub>−G<sub>j</sub>)k<sub>i</sub>ᵀk<sub>j</sub></div>
+        <div class="equation">T=(I+BL)⁻¹B; U=TV; W=T(K⊙exp(G)); R=U−WS<sub>in</sub></div>
+        <div class="equation">P<sub>ij</sub>=1[j≤i]exp(G<sub>i</sub>−G<sub>j</sub>)q<sub>i</sub>ᵀk<sub>j</sub></div>
+        <div class="equation">O=(Q⊙exp(G))S<sub>in</sub>+PR</div>
+        <div class="equation">S<sub>out</sub>=exp(G<sub>last</sub>)S<sub>in</sub>+(K⊙exp(G<sub>last</sub>−G))ᵀR</div>
       </section>
 
       <section>
