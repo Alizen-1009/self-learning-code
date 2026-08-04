@@ -19,10 +19,11 @@
 5. [第 4 课：完整拼出 Gated Delta Chunk](lessons/0004-gated-delta-chunk.html)
 6. [第 5 课：GDN Prefill 真实执行图](lessons/0005-gdn-prefill-execution-map.html)
 7. [第 6 课：B300 Recurrent GDN Baseline](lessons/0006-b300-recurrent-gdn-baseline.html)
-8. [公式速查表](reference/linear-attention-equations.html)
-9. [GDN Prefill 调度速查](reference/gdn-prefill-schedule.html)
-10. [Recurrent GDN Baseline 速查](reference/gdn-recurrent-baseline.html)
-11. [可信资源](RESOURCES.md)
+8. [第 6 课可运行代码](exercises/06-gdn-recurrent-baseline/README.md)
+9. [公式速查表](reference/linear-attention-equations.html)
+10. [GDN Prefill 调度速查](reference/gdn-prefill-schedule.html)
+11. [Recurrent GDN Baseline 速查](reference/gdn-recurrent-baseline.html)
+12. [可信资源](RESOURCES.md)
 
 ### 原有阅读指南
 
@@ -36,13 +37,13 @@
 ## 目录结构
 
 ```text
-liner_attn/
-├── code/                        # GDN/KDA 精选源码，只用于阅读和对照
-│   ├── flashinfer/
-│   ├── fla/
-│   ├── flashkda/
-│   └── cula/
-├── docs/                        # 中文学习材料
+linear_attn/
+├── code/                        # 上游 GDN/KDA 精选源码
+├── exercises/                   # 课程可运行代码与 B300 结果
+│   └── 06-gdn-recurrent-baseline/
+├── lessons/                     # 交互式 HTML 课程
+├── reference/                   # 可打印速查
+├── docs/                        # 深入阅读材料
 └── scripts/refresh_curated_sources.py
 ```
 

@@ -1,0 +1,139 @@
+{
+  "torch": "2.11.0a0+a6c236b9fd.nv26.03.46836102",
+  "cuda": "13.2",
+  "device": "NVIDIA L20D",
+  "capability": [
+    10,
+    3
+  ],
+  "results": [
+    {
+      "implementation": "triton",
+      "shape": [
+        1,
+        1,
+        1,
+        128
+      ],
+      "random_initial_state": false,
+      "output_max_abs": 0.0,
+      "output_rel_l2": 0.0,
+      "state_max_abs": 0.0,
+      "state_rel_l2": 0.0,
+      "elapsed_s_including_compile": 0.7316452090162784,
+      "status": "PASS"
+    },
+    {
+      "implementation": "triton",
+      "shape": [
+        1,
+        4,
+        2,
+        128
+      ],
+      "random_initial_state": true,
+      "output_max_abs": 0.0,
+      "output_rel_l2": 0.0,
+      "state_max_abs": 8.940696716308594e-08,
+      "state_rel_l2": 5.8220400944719586e-08,
+      "elapsed_s_including_compile": 0.11203027819283307,
+      "status": "PASS"
+    },
+    {
+      "implementation": "triton",
+      "shape": [
+        2,
+        17,
+        4,
+        128
+      ],
+      "random_initial_state": false,
+      "output_max_abs": 3.0517578125e-05,
+      "output_rel_l2": 2.8198086511110887e-05,
+      "state_max_abs": 8.940696716308594e-08,
+      "state_rel_l2": 7.690861991704878e-08,
+      "elapsed_s_including_compile": 0.10803096508607268,
+      "status": "PASS"
+    },
+    {
+      "implementation": "triton",
+      "shape": [
+        1,
+        64,
+        8,
+        128
+      ],
+      "random_initial_state": true,
+      "output_max_abs": 1.52587890625e-05,
+      "output_rel_l2": 6.7924370341643225e-06,
+      "state_max_abs": 7.450580596923828e-08,
+      "state_rel_l2": 7.89752050422976e-08,
+      "elapsed_s_including_compile": 0.10764835285954177,
+      "status": "PASS"
+    },
+    {
+      "implementation": "cutedsl",
+      "shape": [
+        1,
+        1,
+        1,
+        128
+      ],
+      "random_initial_state": false,
+      "output_max_abs": 0.0,
+      "output_rel_l2": 0.0,
+      "state_max_abs": 0.0,
+      "state_rel_l2": 0.0,
+      "elapsed_s_including_compile": 1.1917624699417502,
+      "status": "PASS"
+    },
+    {
+      "implementation": "cutedsl",
+      "shape": [
+        1,
+        4,
+        2,
+        128
+      ],
+      "random_initial_state": true,
+      "output_max_abs": 9.313225746154785e-10,
+      "output_rel_l2": 3.028931327975215e-09,
+      "state_max_abs": 8.940696716308594e-08,
+      "state_rel_l2": 5.908160716217026e-08,
+      "elapsed_s_including_compile": 2.410898579051718,
+      "status": "PASS"
+    },
+    {
+      "implementation": "cutedsl",
+      "shape": [
+        2,
+        17,
+        4,
+        128
+      ],
+      "random_initial_state": false,
+      "output_max_abs": 3.0517578125e-05,
+      "output_rel_l2": 2.8034950446453877e-05,
+      "state_max_abs": 8.940696716308594e-08,
+      "state_rel_l2": 7.661821399551627e-08,
+      "elapsed_s_including_compile": 8.649649704108015,
+      "status": "PASS"
+    },
+    {
+      "implementation": "cutedsl",
+      "shape": [
+        1,
+        64,
+        8,
+        128
+      ],
+      "random_initial_state": true,
+      "output_max_abs": 1.52587890625e-05,
+      "output_rel_l2": 7.570915386168053e-06,
+      "state_max_abs": 7.450580596923828e-08,
+      "state_rel_l2": 7.921393319065828e-08,
+      "elapsed_s_including_compile": 35.439004950923845,
+      "status": "PASS"
+    }
+  ]
+}
