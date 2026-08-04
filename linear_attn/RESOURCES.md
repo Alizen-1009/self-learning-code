@@ -36,5 +36,5 @@
 
 ## Gaps
 
-- 尚未记录学习者可用 GPU 的具体型号、CUDA/PyTorch 版本与远程运行方式；进入 Triton 实作前补齐。
-- 尚未通过练习确认学习者对矩阵 shape、causal mask、CUDA memory hierarchy 和 Triton program model 的真实熟练度。
+- B300 已确认通过 ASI Pod `worker0` 远程运行，CUDA Driver/Triton 目标为 SM103；每次实验仍需记录当时的镜像、commit、空闲 GPU 和时钟状态，保证 benchmark 可复现。
+- 尚未通过练习确认学习者对 CUDA memory hierarchy 和 Triton program model 的真实熟练度；第一个 baseline 应同时承担能力校准。

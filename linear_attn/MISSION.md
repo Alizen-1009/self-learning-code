@@ -13,7 +13,7 @@
 - 中文优先，数学必须落到代码、shape 和可运行练习。
 - 每课只解决一个紧凑问题，通过检索练习而不是被动阅读建立长期记忆。
 - 当前先按“熟悉 Python/PyTorch 和 CUDA 基础，尚未系统掌握 LA chunk 推导”设计；根据练习反馈调整。
-- 本机没有 NVIDIA CUDA 环境；GPU kernel 实验需要在可用的 Hopper/Blackwell 机器上完成。
+- 本地不运行 CUDA；GPU 实验统一通过 `b300-pod` / `asicli console` 在 B300 ASI Pod 的 `worker0` 中完成。容器实际 CUDA Driver/Triton target 为 SM103，当前软件为 CUDA 13.2、PyTorch 2.11.0a0、Triton 3.6.0。
 
 ## Out of scope
 - 在掌握 forward/prefill 主线前，不展开完整 backward、跨卡 Context Parallel 和模型训练配方。
