@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="在 B300 SM103 上实现并验证 PyTorch、Triton 与 CuTe DSL 三份 dense recurrent GDN baseline。">
+  <title>第 6 课｜B300 Recurrent GDN Baseline</title>
+  <link rel="stylesheet" href="../assets/course.css">
+  <script src="../assets/quiz.js" defer></script>
+  <script src="../assets/code-highlight.js" defer></script>
+</head>
+<body>
+  <article class="course-shell">
+    <header class="lesson-header">
+      <p class="eyebrow">Linear Attention Kernel Course · Lesson 06</p>
+      <h1>B300 Recurrent GDN<br>Correctness Baseline</h1>
+      <p class="deck">第一次真正写 kernel：同一份 dense recurrent GDN 语义，分别用 PyTorch、Triton 和 CuTe DSL 实现，并在 SM103 上完成 8/8 correctness 验证。</p>
+      <div class="lesson-meta">
+        <span class="pill">B300 / SM103 实测</span>
+        <span class="pill">Triton + CuTe DSL</span>
+        <span class="pill">8 / 8 PASS</span>
+      </div>
+    </header>
+
+    <nav class="lesson-nav" aria-label="课程导航">
+      <a href="0005-gdn-prefill-execution-map.html">上一课</a>
+      <a href="#contract">Contract</a>
+      <a href="#reference">PyTorch</a>
+      <a href="#triton">Triton</a>
+      <a href="#cute">CuTe DSL</a>
+      <a href="#results">B300 结果</a>
+      <a href="#practice">实践</a>
+      <a href="../reference/gdn-recurrent-baseline.html">速查</a>
+    </nav>
+
+    <main>
+      <section>
+        <h2>本课的可见成果</h2>
+        <div class="objective">
+          <span class="label">完成标准</span>
+          <p>能解释两个 GPU kernel 如何切分 `[V,K]` state，为什么 token 维仍串行，以及这份 recurrent baseline 如何成为后续 chunk kernel 的 correctness oracle。</p>
+        </div>
+        <p>运行代码位于 B300 同步仓库分支：</p>
+        <p><a href="https://github.com/Alizen-1009/MLFlow-B300-Sync/tree/lesson/gdn-recurrent-baseline/lessons/gdn_recurrent_baseline"><code>lesson/gdn-recurrent-baseline/lessons/gdn_recurrent_baseline</code></a></p>
+      </section>
+
+      <section id="contract">
+        <h2>1｜先锁定 Phase-1 contract</h2>
+        <p>这节课只实现 GDN 核心 recurrence，所有前处理已经完成：</p>
+        <div class="shape-grid">
+          <div class="shape-card"><strong>q / k / v</strong><span class="shape">BF16 [B,T,H,128]</span></div>
+          <div class="shape-card"><strong>alpha / beta</strong><span class="shape">FP32 [B,T,H]</span></div>
+          <div class="shape-card"><strong>state</strong><span class="shape">FP32 [B,H,V,K]</span></div>
+          <div class="shape-card"><strong>output</strong><span class="shape">BF16 [B,T,H,V]</span></div>
+        </div>
+        <ul>
+          <li>q 已 L2 normalize 并乘 <code>1/sqrt(128)</code>；</li>
+          <li>k 已 L2 normalize；</li>
+          <li>alpha 是乘法 forget gate；</li>
+          <li>beta 是已激活 update rate；</li>
+          <li>固定 <code>K=V=128</code>，暂不支持 varlen/GVA/state pool。</li>
+        </ul>
+        <div class="callout">
+          <span class="label">为什么先分阶段</span>
+          <p>如果第一版同时融合 norm、raw gate、sigmoid、varlen 和 state pool，输出不一致时无法判断是 recurrence 错还是前处理 contract 错。</p>
+        </div>
+      </section>
+
+      <section id="reference">
+        <h2>2｜PyTorch oracle：唯一语义来源</h2>
+        <pre><code class="language-python">for t in range(tokens):
+    state = state * alpha[:, t, :, None, None]
+    prediction = torch.einsum("bhvk,bhk->bhv", state, k[:, t])
+    residual = beta[:, t, :, None] * (v[:, t] - prediction)
+    state = state + residual.unsqueeze(-1) * k[:, t].unsqueeze(-2)
+    output[:, t] = torch.einsum("bhvk,bhk->bhv", state, q[:, t])</code></pre>
+        <p>state 使用 V-first：</p>
+        <div class="equation">state[b,h,v,k]</div>
+        <p>因此每个 V row 都可以独立计算：</p>
+        <div class="equation">prediction[v] = Σₖ state[v,k]·key[k]</div>
+        <p>这给两个 GPU baseline 提供了最自然的切分轴：按 V rows 分 tile。</p>
+      </section>
+
+      <section id="triton">
+        <h2>3｜Triton baseline：一个 program 管 16 个 V rows</h2>
+        <div class="equation">grid = (B × H, ceil(V / 16))</div>
+        <p>一个 Triton program 持有：</p>
+        <div class="equation">state tile [16,128]，FP32</div>
+        <pre><code class="language-python">bh = tl.program_id(0)
+v_tile = tl.program_id(1)
+state = load_state_tile(v_tile)          # [16,128]
+
+for t in tl.range(0, T):                 # token recurrence 串行
+    state *= alpha[t]
+    prediction = tl.sum(state * key[None, :], axis=1)
+    residual = beta[t] * (value - prediction)
+    state += residual[:, None] * key[None, :]
+    output = tl.sum(state * query[None, :], axis=1)
+
+store_final_state_tile(state)</code></pre>
+
+        <h3>哪里并行？</h3>
+        <ul>
+          <li>不同 batch/head 并行；</li>
+          <li>同一 state 的不同 16-row V tiles 并行；</li>
+          <li>每个 row 对 K=128 的 reduction 由 Triton threads 协作。</li>
+        </ul>
+        <h3>哪里串行？</h3>
+        <p>同一 sequence/head/V-tile 的 token loop 串行，因为 token t+1 需要 token t 更新后的 state。</p>
+      </section>
+
+      <section id="cute">
+        <h2>4｜CuTe DSL baseline：一个 warp 管 16 个 V rows</h2>
+        <p>CuTe 版使用与 FlashInfer recurrent KDA 类似的 register-tile schedule：</p>
+        <div class="equation">grid = B × H × (128 / 16)，每 CTA 1 warp</div>
+        <div class="shape-grid">
+          <div class="shape-card"><strong>K partition</strong><span class="shape">16 lane groups × vec8</span></div>
+          <div class="shape-card"><strong>V partition</strong><span class="shape">2 lane rows × 8 rows</span></div>
+          <div class="shape-card"><strong>state/thread</strong><span class="shape">8 rows × 8 K values</span></div>
+          <div class="shape-card"><strong>accumulation</strong><span class="shape">FP32 registers</span></div>
+        </div>
+        <p>每个线程先加载自己负责的 state 元素；q/k 由 32 lanes 分片加载，再通过 warp shuffle 广播给两个 V lane groups：</p>
+        <pre><code class="language-python">for token in cutlass.range_constexpr(T):
+    load_qk_fragments()
+    q_vec8 = warp_shuffle_broadcast(q_fragment)
+    k_vec8 = warp_shuffle_broadcast(k_fragment)
+
+    for owned_v_row in rows:
+        state_row *= alpha
+        prediction = butterfly_reduce(dot8(state_row, k_vec8))
+        residual = beta * (value - prediction)
+        state_row += residual * k_vec8
+        output = butterfly_reduce(dot8(state_row, q_vec8))</code></pre>
+        <p>这里没有使用 TMEM/Tensor Core；它是教学用 correctness baseline。后续 chunk 版才会把工作转为 GEMM，并使用 Blackwell 的 TMEM/UMMA。</p>
+      </section>
+
+      <section id="results">
+        <h2>5｜B300 / SM103 实测结果</h2>
+        <p>环境：</p>
+        <pre><code>CUDA 13.2
+PyTorch 2.11.0a0
+Triton 3.6.0
+CUDA Driver capability 10.3
+GPU 0（运行前确认空闲）</code></pre>
+
+        <table class="matrix-table" aria-label="B300 recurrent GDN correctness results">
+          <tr><td>实现</td><td>Shape [B,T,H,D]</td><td>output rel-L2</td><td>state rel-L2</td><td>状态</td></tr>
+          <tr><td>Triton</td><td>[1,1,1,128]</td><td>0</td><td>0</td><td>PASS</td></tr>
+          <tr><td>Triton</td><td>[1,4,2,128]</td><td>0</td><td>5.822e-8</td><td>PASS</td></tr>
+          <tr><td>Triton</td><td>[2,17,4,128]</td><td>2.820e-5</td><td>7.691e-8</td><td>PASS</td></tr>
+          <tr><td>Triton</td><td>[1,64,8,128]</td><td>6.792e-6</td><td>7.898e-8</td><td>PASS</td></tr>
+          <tr><td>CuTe</td><td>[1,1,1,128]</td><td>0</td><td>0</td><td>PASS</td></tr>
+          <tr><td>CuTe</td><td>[1,4,2,128]</td><td>3.029e-9</td><td>5.908e-8</td><td>PASS</td></tr>
+          <tr><td>CuTe</td><td>[2,17,4,128]</td><td>2.803e-5</td><td>7.662e-8</td><td>PASS</td></tr>
+          <tr><td>CuTe</td><td>[1,64,8,128]</td><td>7.571e-6</td><td>7.921e-8</td><td>PASS</td></tr>
+        </table>
+
+        <div class="callout">
+          <span class="label">结果解释</span>
+          <p>8/8 PASS。最大 output rel-L2 为 <code>2.820e-5</code>，最大 final-state rel-L2 为 <code>7.921e-8</code>。测试中的 elapsed 包含 JIT 编译，不是 kernel latency，不能用于性能结论。</p>
+        </div>
+      </section>
+
+      <section id="practice">
+        <h2>6｜你的实践任务</h2>
+        <ol class="steps">
+          <li><strong>画 tile：</strong>解释为什么 V rows 可以由不同 programs/CTAs 独立处理，而 token 不能。</li>
+          <li><strong>故障注入：</strong>把 update 和 output 顺序交换，观察 output 与 reference 从哪个 T 开始不一致。</li>
+          <li><strong>故障注入：</strong>删除 <code>state *= alpha</code>，比较 zero/random initial state 哪个更快暴露错误。</li>
+          <li><strong>代码阅读：</strong>在 CuTe kernel 中找到 q/k 的 lane 分片、shuffle 和 butterfly reduction。</li>
+        </ol>
+
+        <p>远程复现命令：</p>
+        <pre><code class="language-python"># 在 B300 独立 worktree 中
+CUDA_VISIBLE_DEVICES=0 python3 test_correctness.py \
+    --implementation both \
+    --output results.json</code></pre>
+      </section>
+
+      <section id="quiz">
+        <h2>7｜立即检索</h2>
+        <form class="quiz quiz-form">
+          <fieldset class="quiz-question" data-answer="vrows" data-explanation="每个 V row 只共享 q/k/alpha/beta，不读取其他 V row 的 state，因此可独立切 tile。">
+            <legend>1. Recurrent baseline 主要沿哪个维度并行？</legend>
+            <label class="option"><input type="radio" name="q1" value="vrows">状态 V 行维度</label>
+            <label class="option"><input type="radio" name="q1" value="tokens">序列 Token 维</label>
+            <label class="option"><input type="radio" name="q1" value="steps">更新步骤维度</label>
+          </fieldset>
+
+          <fieldset class="quiz-question" data-answer="serial" data-explanation="token t+1 必须读取 token t 更新后的 state，所以 token loop 保持串行。">
+            <legend>2. 为什么 token loop 没有并行？</legend>
+            <label class="option"><input type="radio" name="q2" value="serial">存在状态依赖</label>
+            <label class="option"><input type="radio" name="q2" value="shape">张量形状太小</label>
+            <label class="option"><input type="radio" name="q2" value="dtype">BF16 不支持</label>
+          </fieldset>
+
+          <fieldset class="quiz-question" data-answer="oracle" data-explanation="chunk kernel 必须和 recurrent 语义一致，因此这三份实现先锁定 output/final-state oracle。">
+            <legend>3. 这份 baseline 对 chunk 实现最重要的作用是什么？</legend>
+            <label class="option"><input type="radio" name="q3" value="oracle">提供正确性基准</label>
+            <label class="option"><input type="radio" name="q3" value="peak">提供峰值性能</label>
+            <label class="option"><input type="radio" name="q3" value="train">提供训练数据</label>
+          </fieldset>
+
+          <button type="submit">检查答案</button>
+          <p class="feedback" role="status" aria-live="polite"></p>
+        </form>
+      </section>
+
+      <section>
+        <h2>8｜下一步</h2>
+        <p>第 7 课会保持同一个 input/output contract，把 token recurrence 改写为第一个 correctness-first chunk GDN：先在 PyTorch 中验证 chunk，再决定 Triton 如何拆成 local preparation、state scan 和 output。</p>
+      </section>
+    </main>
+
+    <footer class="lesson-footer">
+      <p><strong>运行报告：</strong><a href="https://github.com/Alizen-1009/MLFlow-B300-Sync/blob/lesson/gdn-recurrent-baseline/lessons/gdn_recurrent_baseline/baseline_report.md">baseline_report.md</a></p>
+      <p><strong>主要知识来源：</strong><a href="https://github.com/NVIDIA/cutlass/tree/main/python/CuTeDSL">CuTe DSL</a>、Triton 3.6 Blackwell、FlashInfer recurrent register-tile schedule。</p>
+      <p>本课只建立 correctness，不宣称性能最优。</p>
+    </footer>
+  </article>
+</body>
+</html>

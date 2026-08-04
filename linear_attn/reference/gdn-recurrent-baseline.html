@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Recurrent GDN Baseline 速查</title>
+  <link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+  <article class="course-shell">
+    <header class="lesson-header">
+      <p class="eyebrow">Quick Reference · Lesson 06</p>
+      <h1>Recurrent GDN<br>Baseline 速查</h1>
+      <p class="deck">B300 SM103 上 PyTorch、Triton、CuTe DSL 共用的 Phase-1 contract 与调度。</p>
+    </header>
+    <nav class="lesson-nav">
+      <a href="../lessons/0006-b300-recurrent-gdn-baseline.html">第 6 课</a>
+      <a href="gdn-prefill-schedule.html">Prefill 调度</a>
+    </nav>
+    <main>
+      <section>
+        <h2>Contract</h2>
+        <pre><code>q/k/v        BF16 [B,T,H,128]
+alpha/beta   FP32 [B,T,H]
+state in/out FP32 [B,H,V,K]
+output       BF16 [B,T,H,V]
+q/k normalized; q already scaled</code></pre>
+      </section>
+      <section>
+        <h2>Token semantics</h2>
+        <div class="equation">S←αS<br>r←β(v−Sk)<br>S←S+r·kᵀ<br>o←Sq</div>
+      </section>
+      <section>
+        <h2>Triton schedule</h2>
+        <pre><code>grid = (B×H, ceil(V/16))
+program state tile = [16,128]
+parallel: B / H / V tiles
+serial: token loop</code></pre>
+      </section>
+      <section>
+        <h2>CuTe DSL schedule</h2>
+        <pre><code>grid = B×H×(128/16)
+1 CTA = 1 warp = 16 V rows
+K: 16 lane groups × vec8
+V: 2 lane rows × 8 rows
+state: FP32 registers across T</code></pre>
+      </section>
+      <section>
+        <h2>B300 result</h2>
+        <div class="equation">8 / 8 PASS<br>max output rel-L2 = 2.820e-5<br>max state rel-L2 = 7.921e-8</div>
+      </section>
+    </main>
+    <footer class="lesson-footer"><p>用途：作为后续 chunk GDN 的 output/final-state correctness oracle；不是性能目标。</p></footer>
+  </article>
+</body>
+</html>
