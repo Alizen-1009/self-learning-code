@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="将 Lesson 6 recurrent GDN oracle 改写为 C=64 FLA-style multi-kernel Triton chunk baseline，并在 B300 SM103 验证。">
+  <title>第 7 课｜C=64 GDN Chunk Triton Baseline</title>
+  <link rel="stylesheet" href="../assets/course.css">
+  <script src="../assets/quiz.js" defer></script>
+  <script src="../assets/code-highlight.js" defer></script>
+</head>
+<body>
+  <article class="course-shell">
+    <header class="lesson-header">
+      <p class="eyebrow">Linear Attention Kernel Course · Lesson 07</p>
+      <h1>C=64 GDN Chunk<br>Triton Baseline</h1>
+      <p class="deck">保持第 6 课的 input/output contract，把 token recurrence 改写成 FLA-style 五阶段 pipeline，并在 B300 SM103 上完成 4/4 correctness。</p>
+      <div class="lesson-meta">
+        <span class="pill">B300 / SM103 实测</span>
+        <span class="pill">Chunk = 64</span>
+        <span class="pill">4 / 4 PASS</span>
+      </div>
+    </header>
+
+    <nav class="lesson-nav">
+      <a href="0006-b300-recurrent-gdn-baseline.html">上一课</a>
+      <a href="#bridge">Recurrent → Chunk</a>
+      <a href="#pipeline">五阶段</a>
+      <a href="#serial">串行状态</a>
+      <a href="#results">B300 结果</a>
+      <a href="#practice">实践</a>
+      <a href="../reference/gdn-chunk-baseline.html">速查</a>
+    </nav>
+
+    <main>
+      <section>
+        <h2>本课的可见成果</h2>
+        <div class="objective">
+          <span class="label">完成标准</span>
+          <p>能从代码指出哪些 kernel 以 chunk 为 grid、哪个 kernel 在内部循环 chunk，以及 G/Ainv/W/U/H/R 为什么会出现在 global memory。</p>
+        </div>
+        <p>本仓库代码：<a href="../exercises/07-gdn-chunk-triton-baseline/README.md"><code>exercises/07-gdn-chunk-triton-baseline/</code></a></p>
+        <p>B300 同步分支：<a href="https://github.com/Alizen-1009/MLFlow-B300-Sync/tree/lesson/gdn-chunk-triton-baseline/lessons/gdn_chunk_triton_baseline"><code>lesson/gdn-chunk-triton-baseline</code></a></p>
+      </section>
+
+      <section id="bridge">
+        <h2>1｜我们改变了什么？</h2>
+        <div class="two-column">
+          <div class="shape-card">
+            <strong>Lesson 6 recurrent</strong>
+            <pre><code class="language-python">for token in range(T):
+    state = recurrent_step(state, token)</code></pre>
+            <p class="small">串行链长度 T；没有 KKT/W/U/H/R。</p>
+          </div>
+          <div class="shape-card">
+            <strong>Lesson 7 chunk</strong>
+            <pre><code class="language-python">parallel_prepare_all_chunks()
+scan_chunk_states_serially()
+parallel_compute_all_outputs()</code></pre>
+            <p class="small">串行链长度 NT=T/64；额外物化 chunk intermediates。</p>
+          </div>
+        </div>
+        <p>输入 contract 完全不变：</p>
+        <div class="equation">BF16 q/k/v [B,T,H,128]<br>FP32 alpha/beta [B,T,H]<br>FP32 V-first state [B,H,128,128]</div>
+        <p>这样 output/final state 可以直接与第 6 课 recurrent oracle 比较。</p>
+      </section>
+
+      <section id="pipeline">
+        <h2>2｜五阶段 Triton pipeline</h2>
+        <div class="equation">
+          Gate/KKT → Solve → W/U → State Scan → Output<br>
+          parallel　 parallel　 parallel　 serial chunks　 parallel
+        </div>
+
+        <h3>Stage 1：Gate cumsum + weighted KKT</h3>
+        <pre><code class="language-python">grid = B * H * NT
+G = cumsum(log(alpha))
+gram = K @ K.T
+left = I + strict_lower(beta * exp(G_i-G_j) * gram)</code></pre>
+        <p>每个 program 负责一个 `(batch,head,chunk)`，chunks 完全独立。</p>
+
+        <h3>Stage 2：unit-lower triangular inverse</h3>
+        <pre><code class="language-python">grid = B * H * NT
+Ainv = inverse_lower_triangular(left)</code></pre>
+        <p>每个 64×64 系统独立做 row-wise forward substitution。输出 Ainv 为 BF16，供后续 dot 使用。</p>
+
+        <h3>Stage 3：W/U</h3>
+        <pre><code class="language-python">grid = B * H * NT
+U = Ainv @ (beta * V)
+W = Ainv @ (beta * exp(G) * K)</code></pre>
+        <p>仍然不需要 incoming state，所以所有 chunks 可以并行。</p>
+
+        <h3>Stage 4：State scan</h3>
+        <pre><code class="language-python">grid = (B * H, V_tiles)
+
+for chunk in range(NT):
+    H[chunk] = state
+    R = U[chunk] - W[chunk] @ state
+    save R
+    state = decay_to_end(state) + K_end.T @ R</code></pre>
+        <p>grid 没有 NT；一个 program 持有 `[16,128]` state tile，并顺序扫描 chunks。</p>
+
+        <h3>Stage 5：Output</h3>
+        <pre><code class="language-python">grid = (B * H * NT, V_tiles)
+inter = (Q * exp(G)) @ H.T
+intra = weighted_causal_QK @ R
+output = inter + intra</code></pre>
+        <p>H/R 已准备完毕，所有 chunk outputs 再次并行。</p>
+      </section>
+
+      <section>
+        <h2>3｜Global intermediates 是教学重点</h2>
+        <table class="matrix-table">
+          <tr><td>Tensor</td><td>Dtype</td><td>Shape</td><td>作用</td></tr>
+          <tr><td>G</td><td>FP32</td><td>[B,T,H]</td><td>相对 decay</td></tr>
+          <tr><td>left</td><td>FP32</td><td>[B,NT,H,64,64]</td><td>下三角系统</td></tr>
+          <tr><td>Ainv</td><td>BF16</td><td>[B,NT,H,64,64]</td><td>solve 结果</td></tr>
+          <tr><td>W/U</td><td>BF16</td><td>[B,T,H,128]</td><td>chunk-local 表示</td></tr>
+          <tr><td>H</td><td>FP32</td><td>[B,NT,H,128,128]</td><td>chunk incoming state</td></tr>
+          <tr><td>R</td><td>BF16</td><td>[B,T,H,128]</td><td>corrected residual</td></tr>
+        </table>
+        <div class="callout">
+          <span class="label">与 FlashInfer 的连接</span>
+          <p>这个 baseline 故意把中间量全部物化，便于检查每一阶段。FlashInfer SM103 的主要优化方向恰恰是融合这些阶段，让 Ainv/residual/state 尽量停留在 SMEM/TMEM/register。</p>
+        </div>
+      </section>
+
+      <section id="serial">
+        <h2>4｜唯一 chunk-serial 的阶段</h2>
+        <p>Stage 4 中：</p>
+        <div class="equation">state[c+1] 依赖 state[c]</div>
+        <p>因此同一 `(batch,head,V-tile)` 必须：</p>
+        <div class="equation">chunk 0 → chunk 1 → ... → chunk NT−1</div>
+        <p>但不同 batch、head、V tile 仍然并行。与第 6 课相比，串行长度从 T 缩短为 NT；代价是前三阶段和第五阶段增加矩阵计算与 HBM intermediates。</p>
+      </section>
+
+      <section id="results">
+        <h2>5｜B300 SM103 correctness</h2>
+        <table class="matrix-table">
+          <tr><td>Shape [B,T,H,D]</td><td>State</td><td>PyTorch chunk rel-L2</td><td>Triton rel-L2</td><td>状态</td></tr>
+          <tr><td>[1,64,1,128]</td><td>zero</td><td>1.275e-3</td><td>3.801e-3</td><td>PASS</td></tr>
+          <tr><td>[1,64,4,128]</td><td>random</td><td>1.165e-3</td><td>4.073e-3</td><td>PASS</td></tr>
+          <tr><td>[1,128,2,128]</td><td>zero</td><td>1.212e-3</td><td>4.079e-3</td><td>PASS</td></tr>
+          <tr><td>[2,128,4,128]</td><td>random</td><td>1.218e-3</td><td>4.219e-3</td><td>PASS</td></tr>
+        </table>
+        <div class="callout">
+          <span class="label">为什么不是 0 error？</span>
+          <p>Chunk 在代数上与 recurrent 等价，但改变了 BF16/FP32 reduction 顺序。甚至纯 PyTorch chunk 与 recurrent 也有约 1.2e-3 相对误差；Triton 最大 4.219e-3，低于 BF16 baseline 阈值 1e-2。</p>
+        </div>
+        <p>最终状态最大 rel-L2 为 <code>3.224e-3</code>；4/4 cases PASS。</p>
+      </section>
+
+      <section>
+        <h2>6｜B300 实践中暴露的三个问题</h2>
+        <ol class="steps">
+          <li><strong>普通 Python 全局常量：</strong>Triton 3.6 不允许 kernel 捕获普通 C/D；必须使用实例化的 <code>tl.constexpr</code> 或显式 launch constexpr。</li>
+          <li><strong>负索引：</strong><code>G[-1]</code> 不是合法 Triton tensor index；使用 masked reduction 提取 chunk 最后一项。</li>
+          <li><strong>错误阈值：</strong>最初用 1e-5 混淆了数学等价和浮点 bitwise 等价；保留原始误差后改用 BF16 的 1e-2 标准。</li>
+        </ol>
+      </section>
+
+      <section id="practice">
+        <h2>7｜你的实践任务</h2>
+        <ol>
+          <li>在 `triton_chunk_baseline.py` 中为五个 kernel 标注 grid 是否包含 NT。</li>
+          <li>追踪一个 shape `[1,128,2,128]`：算出 NT、state programs 和 output programs 数量。</li>
+          <li>检查 `H[0]` 是否等于 initial state，`H[1]` 是否等于 chunk 0 final state。</li>
+          <li>将 Ainv 改为 FP32 存储并重跑，观察误差和中间量大小变化；不要先假设性能。</li>
+        </ol>
+        <p>本地代码：<a href="../exercises/07-gdn-chunk-triton-baseline/triton_chunk_baseline.py"><code>triton_chunk_baseline.py</code></a></p>
+      </section>
+
+      <section>
+        <h2>8｜立即检索</h2>
+        <form class="quiz quiz-form">
+          <fieldset class="quiz-question" data-answer="state" data-explanation="State scan 的 grid 没有 NT，并在 program 内循环 chunks。">
+            <legend>1. 哪个阶段在 chunk 维串行？</legend>
+            <label class="option"><input type="radio" name="q1" value="solve">三角求解阶段</label>
+            <label class="option"><input type="radio" name="q1" value="state">状态扫描阶段</label>
+            <label class="option"><input type="radio" name="q1" value="output">输出计算阶段</label>
+          </fieldset>
+          <fieldset class="quiz-question" data-answer="h" data-explanation="独立 output kernel 需要每个 chunk 的 incoming state，所以 state scan 保存 H。">
+            <legend>2. 为什么物化 H？</legend>
+            <label class="option"><input type="radio" name="q2" value="h">供输出读取状态</label>
+            <label class="option"><input type="radio" name="q2" value="gate">供 gate 做激活</label>
+            <label class="option"><input type="radio" name="q2" value="index">供 grid 算索引</label>
+          </fieldset>
+          <fieldset class="quiz-question" data-answer="order" data-explanation="Chunk 改变 reduction/舍入顺序，数学等价不意味着浮点逐位一致。">
+            <legend>3. PyTorch chunk 为什么也不是零误差？</legend>
+            <label class="option"><input type="radio" name="q3" value="order">浮点顺序改变</label>
+            <label class="option"><input type="radio" name="q3" value="math">数学公式不同</label>
+            <label class="option"><input type="radio" name="q3" value="mask">因果 mask 缺失</label>
+          </fieldset>
+          <button type="submit">检查答案</button>
+          <p class="feedback" role="status" aria-live="polite"></p>
+        </form>
+      </section>
+
+      <section>
+        <h2>9｜下一步</h2>
+        <p>现在有了“正确但物化很多”的 FLA-style baseline。下一课应先测量各 stage latency 与 HBM intermediates，再决定做 Ainv/WU fusion、state/output fusion，还是进入 CuTe DSL chunk；不凭直觉选择。</p>
+      </section>
+    </main>
+
+    <footer class="lesson-footer">
+      <p><strong>运行报告：</strong><a href="../exercises/07-gdn-chunk-triton-baseline/baseline_report.md">baseline_report.md</a></p>
+      <p><strong>源分支：</strong><a href="https://github.com/Alizen-1009/MLFlow-B300-Sync/tree/lesson/gdn-chunk-triton-baseline">lesson/gdn-chunk-triton-baseline</a></p>
+      <p>本课建立 correctness baseline，不提供性能结论。</p>
+    </footer>
+  </article>
+</body>
+</html>

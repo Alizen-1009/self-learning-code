@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>C64 GDN Chunk Baseline 速查</title><link rel="stylesheet" href="../assets/course.css"></head>
+<body><article class="course-shell">
+<header class="lesson-header"><p class="eyebrow">Quick Reference · Lesson 07</p><h1>C=64 GDN Chunk<br>Baseline 速查</h1></header>
+<nav class="lesson-nav"><a href="../lessons/0007-c64-gdn-chunk-triton-baseline.html">第 7 课</a><a href="gdn-recurrent-baseline.html">Recurrent 速查</a></nav>
+<main>
+<section><h2>Pipeline</h2><pre><code>Gate/KKT → Solve → W/U → State Scan → Output
+ parallel    parallel parallel serial NT    parallel</code></pre></section>
+<section><h2>Grids</h2><pre><code>gate/KKT  B×H×NT
+solve     B×H×NT
+W/U       B×H×NT
+state     B×H×Vtiles; for chunk in NT
+output    B×H×NT×Vtiles</code></pre></section>
+<section><h2>Intermediates</h2><pre><code>G FP32      [B,T,H]
+left FP32   [B,NT,H,64,64]
+Ainv BF16   [B,NT,H,64,64]
+W/U BF16    [B,T,H,128]
+H FP32      [B,NT,H,128,128]
+R BF16      [B,T,H,128]</code></pre></section>
+<section><h2>B300 result</h2><div class="equation">4/4 PASS<br>max output rel-L2 4.219e-3<br>max state rel-L2 3.224e-3</div></section>
+<section><h2>限制</h2><p>C=64；T 为 64 倍数；dense H=HV；无 tail/varlen/state pool/preprocessing fusion；correctness only。</p></section>
+</main><footer class="lesson-footer"><p>核心：把 token 串行链缩短为 chunk 串行链，代价是局部矩阵计算和 global intermediates。</p></footer>
+</article></body></html>

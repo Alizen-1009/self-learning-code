@@ -1,0 +1,98 @@
+{
+  "device": "NVIDIA L20D",
+  "capability": [
+    10,
+    3
+  ],
+  "chunk_size": 64,
+  "results": [
+    {
+      "shape": [
+        1,
+        64,
+        1,
+        128
+      ],
+      "random_initial_state": false,
+      "pytorch_chunk_vs_recurrent": {
+        "output_max_abs": 0.00048828125,
+        "output_rel_l2": 0.0012745228596031666,
+        "state_max_abs": 0.0005344301462173462,
+        "state_rel_l2": 0.0003886102349497378
+      },
+      "triton_chunk_vs_recurrent": {
+        "output_max_abs": 0.00048828125,
+        "output_rel_l2": 0.003801321843639016,
+        "state_max_abs": 0.004346191883087158,
+        "state_rel_l2": 0.003223537001758814
+      },
+      "status": "PASS"
+    },
+    {
+      "shape": [
+        1,
+        64,
+        4,
+        128
+      ],
+      "random_initial_state": true,
+      "pytorch_chunk_vs_recurrent": {
+        "output_max_abs": 0.000244140625,
+        "output_rel_l2": 0.0011646641651168466,
+        "state_max_abs": 0.0005959421396255493,
+        "state_rel_l2": 0.0003766672743950039
+      },
+      "triton_chunk_vs_recurrent": {
+        "output_max_abs": 0.00048828125,
+        "output_rel_l2": 0.004072657320648432,
+        "state_max_abs": 0.004575014114379883,
+        "state_rel_l2": 0.00300599099136889
+      },
+      "status": "PASS"
+    },
+    {
+      "shape": [
+        1,
+        128,
+        2,
+        128
+      ],
+      "random_initial_state": false,
+      "pytorch_chunk_vs_recurrent": {
+        "output_max_abs": 0.00048828125,
+        "output_rel_l2": 0.0012115638237446547,
+        "state_max_abs": 0.0005068778991699219,
+        "state_rel_l2": 0.00038264147588051856
+      },
+      "triton_chunk_vs_recurrent": {
+        "output_max_abs": 0.00048828125,
+        "output_rel_l2": 0.00407880125567317,
+        "state_max_abs": 0.004439890384674072,
+        "state_rel_l2": 0.003055199747905135
+      },
+      "status": "PASS"
+    },
+    {
+      "shape": [
+        2,
+        128,
+        4,
+        128
+      ],
+      "random_initial_state": true,
+      "pytorch_chunk_vs_recurrent": {
+        "output_max_abs": 0.00048828125,
+        "output_rel_l2": 0.0012179592158645391,
+        "state_max_abs": 0.0006488338112831116,
+        "state_rel_l2": 0.0003802004212047905
+      },
+      "triton_chunk_vs_recurrent": {
+        "output_max_abs": 0.00048828125,
+        "output_rel_l2": 0.004219223279505968,
+        "state_max_abs": 0.004687070846557617,
+        "state_rel_l2": 0.0030617727898061275
+      },
+      "status": "PASS"
+    }
+  ]
+}

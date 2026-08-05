@@ -208,7 +208,7 @@ CUDA_VISIBLE_DEVICES=0 python3 test_correctness.py \
 
       <section>
         <h2>8｜下一步</h2>
-        <p>第 7 课会保持同一个 input/output contract，把 token recurrence 改写为第一个 correctness-first chunk GDN：先在 PyTorch 中验证 chunk，再决定 Triton 如何拆成 local preparation、state scan 和 output。</p>
+        <p><a href="0007-c64-gdn-chunk-triton-baseline.html">第 7 课</a>保持同一个 input/output contract，已经完成 C=64 PyTorch chunk oracle 与 FLA-style 五阶段 Triton baseline，并在 B300 上通过 4/4 correctness。</p>
       </section>
     </main>
 

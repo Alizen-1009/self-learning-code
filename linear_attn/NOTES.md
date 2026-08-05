@@ -13,3 +13,4 @@
 - 目标环境固定为 B300 ASI Pod（容器 `worker0`），远程操作使用 `b300-pod` skill / `asicli console`。运行时信息：8× `NVIDIA L20D`（内部设备名），CUDA Driver API 与 PyTorch 均报告 compute capability 10.3，Triton target `arch=103`；CUDA 13.2、PyTorch 2.11.0a0、Triton 3.6.0。`nvidia-smi --query-gpu=compute_cap` 错报 8.9，不作为架构判断依据。
 - B300 多人共用；每次 benchmark 前重新检查 GPU 空闲情况，只选择空闲卡，不触碰他人进程。
 - 第 6 课 Phase 1 已在 B300 GPU 0 完成：dense D=128、预处理 q/k/alpha/beta、FP32 V-first state；Triton 与 CuTe DSL 共 8/8 correctness PASS。最大 output rel-L2 `2.820e-5`，最大 final-state rel-L2 `7.921e-8`。
+- 用户确认已基本掌握第 6 课，进入第 7 课。第 7 课选择 C=64，完成 PyTorch exact chunk 与 FLA-style 五阶段 Triton pipeline；B300 4/4 PASS，最大 output rel-L2 `4.219e-3`、state rel-L2 `3.224e-3`。
