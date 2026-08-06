@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="description" content="GDN 阶段毕业挑战：recurrent 语义、FLA grid、FlashInfer persistent 调度和优化证据。"><title>第 9 课｜GDN 毕业挑战</title><link rel="stylesheet" href="../assets/course.css"><script src="../assets/quiz.js" defer></script><script src="../assets/code-highlight.js" defer></script></head>
+<body><article class="course-shell">
+<header class="lesson-header"><p class="eyebrow">Linear Attention Kernel Course · Lesson 09</p><h1>GDN<br>毕业挑战</h1><p class="deck">不再增加新知识。用代码、grid 计算和四个工程问题验证你能否独立解释 recurrent、FLA chunk 和 FlashInfer persistent 三条路径。</p><div class="lesson-meta"><span class="pill">目标 8 / 10</span><span class="pill">约 30 分钟</span><span class="pill">通过后进入 KDA</span></div></header>
+<nav class="lesson-nav"><a href="0008-readable-persistent-cutedsl-gdn.html">上一课</a><a href="#code">代码</a><a href="#grid">Grid</a><a href="#written">问答</a><a href="#quiz">热身</a></nav>
+<main>
+<section><h2>规则</h2><div class="objective"><span class="label">通过标准</span><p>自动代码题 6 分 + 书面题 4 分，总分达到 8 分。第一次尝试前不要阅读 grader 的 oracle。</p></div><p>练习目录：<a href="../exercises/09-gdn-capstone/README.md"><code>exercises/09-gdn-capstone/</code></a></p></section>
+
+<section id="quiz"><h2>1｜三题热身</h2><form class="quiz quiz-form"><fieldset class="quiz-question" data-answer="v" data-explanation="V rows 独立；K 是 prediction/output 的 reduction 维。"><legend>1. Recurrent state 最自然的 grid 并行轴是什么？</legend><label class="option"><input type="radio" name="q1" value="v">Value 行维度</label><label class="option"><input type="radio" name="q1" value="t">Token 时间维</label><label class="option"><input type="radio" name="q1" value="k">Key 归约维度</label></fieldset><fieldset class="quiz-question" data-answer="scan" data-explanation="FLA 的 state scan grid 不含 NT，并在 program 内循环 chunks。"><legend>2. FLA 哪个阶段 chunk-serial？</legend><label class="option"><input type="radio" name="q2" value="scan">State Scan</label><label class="option"><input type="radio" name="q2" value="wu">Prepare WU</label><label class="option"><input type="radio" name="q2" value="out">Output GEMM</label></fieldset><fieldset class="quiz-question" data-answer="state" data-explanation="SM103 的核心优势是 state 留在 TMEM，当前 chunk 立即消费局部中间量。"><legend>3. FlashInfer SM103 不保存完整 H/R 的核心原因？</legend><label class="option"><input type="radio" name="q3" value="state">片上立即消费</label><label class="option"><input type="radio" name="q3" value="unused">中间量无作用</label><label class="option"><input type="radio" name="q3" value="small">序列长度很小</label></fieldset><button type="submit">检查答案</button><p class="feedback" role="status"></p></form></section>
+
+<section id="code"><h2>2｜代码题：一个正确的 GDN step</h2><p>实现 V-first state 的执行顺序：</p><pre><code class="language-python">decay
+→ prediction
+→ residual
+→ rank-1 state update
+→ output from updated state</code></pre><p>要求输入 state 不被原地修改。测试会故意使用非零 initial state，以暴露漏掉 decay 或顺序错误。</p></section>
+
+<section id="grid"><h2>3｜Grid 计算题</h2><p>给定：</p><div class="equation">B=2, T=256, H=8, C=64, V=128, BLOCK_V=16</div><p>你需要返回：</p><pre><code>NT
+Gate/KKT programs
+Solve programs
+W/U programs
+State programs
+Output programs
+FlashInfer logical tiles</code></pre><p>判断原则只有两条：grid 含 NT 就跨 chunk 并行；kernel 内 for NT 就是 chunk-serial。</p></section>
+
+<section id="written"><h2>4｜四个工程问答</h2><ol><li>为什么 FLA 保存 H 和 R，而 SM103 通常不保存？</li><li>FLA state scan 哪些维度仍然并行？</li><li>普通 SM90 与 SM103 的 state storage / warp 调度有何不同？</li><li>Lesson 7 第一次 fusion 前应收集什么 profile 证据？</li></ol><p>每题 2–5 句，重点是因果关系，不要求复述课程原文。</p></section>
+
+<section><h2>5｜提交方式</h2><pre><code class="language-python">cd linear_attn/exercises/09-gdn-capstone
+python3 grade.py</code></pre><p>把 `AUTO SCORE` 和四道书面答案发给我。通过后我会创建 GDN milestone learning record，并开始 KDA。</p></section>
+</main><footer class="lesson-footer"><p>这是能力检查，不是新知识讲解；不通过的题只补对应缺口，不重讲整套 GDN。</p></footer>
+</article></body></html>
