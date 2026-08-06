@@ -1,0 +1,66 @@
+{
+  "device": "NVIDIA L20D",
+  "capability": [
+    10,
+    3
+  ],
+  "schedule": "one CTA per batch-head, eight warps per CTA",
+  "results": [
+    {
+      "shape": [
+        1,
+        64,
+        1,
+        128
+      ],
+      "random_initial_state": false,
+      "output_max_abs": 3.725290298461914e-09,
+      "output_rel_l2": 4.075287662885785e-09,
+      "state_max_abs": 8.940696716308594e-08,
+      "state_rel_l2": 8.073816815112878e-08,
+      "status": "PASS"
+    },
+    {
+      "shape": [
+        1,
+        64,
+        4,
+        128
+      ],
+      "random_initial_state": true,
+      "output_max_abs": 2.384185791015625e-07,
+      "output_rel_l2": 1.4023616756730917e-07,
+      "state_max_abs": 8.940696716308594e-08,
+      "state_rel_l2": 7.83393048209291e-08,
+      "status": "PASS"
+    },
+    {
+      "shape": [
+        1,
+        128,
+        2,
+        128
+      ],
+      "random_initial_state": false,
+      "output_max_abs": 6.103515625e-05,
+      "output_rel_l2": 4.164760321145877e-05,
+      "state_max_abs": 7.450580596923828e-08,
+      "state_rel_l2": 7.520772271618625e-08,
+      "status": "PASS"
+    },
+    {
+      "shape": [
+        2,
+        128,
+        4,
+        128
+      ],
+      "random_initial_state": true,
+      "output_max_abs": 3.0517578125e-05,
+      "output_rel_l2": 1.572665678395424e-05,
+      "state_max_abs": 1.1920928955078125e-07,
+      "state_rel_l2": 8.076192870021259e-08,
+      "status": "PASS"
+    }
+  ]
+}

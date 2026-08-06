@@ -22,11 +22,14 @@
 8. [第 6 课可运行代码](exercises/06-gdn-recurrent-baseline/README.md)
 9. [第 7 课：C=64 GDN Chunk Triton Baseline](lessons/0007-c64-gdn-chunk-triton-baseline.html)
 10. [第 7 课可运行代码](exercises/07-gdn-chunk-triton-baseline/README.md)
-11. [公式速查表](reference/linear-attention-equations.html)
-12. [GDN Prefill 调度速查](reference/gdn-prefill-schedule.html)
-13. [Recurrent GDN Baseline 速查](reference/gdn-recurrent-baseline.html)
-14. [Chunk GDN Baseline 速查](reference/gdn-chunk-baseline.html)
-15. [可信资源](RESOURCES.md)
+11. [第 8 课：Readable Persistent CuTe DSL GDN](lessons/0008-readable-persistent-cutedsl-gdn.html)
+12. [第 8 课可运行代码](exercises/08-gdn-cutedsl-persistent-readable/README.md)
+13. [公式速查表](reference/linear-attention-equations.html)
+14. [GDN Prefill 调度速查](reference/gdn-prefill-schedule.html)
+15. [Recurrent GDN Baseline 速查](reference/gdn-recurrent-baseline.html)
+16. [Chunk GDN Baseline 速查](reference/gdn-chunk-baseline.html)
+17. [Persistent CuTe GDN 速查](reference/gdn-persistent-cutedsl.html)
+18. [可信资源](RESOURCES.md)
 
 ### 原有阅读指南
 
@@ -44,7 +47,8 @@ linear_attn/
 ├── code/                        # 上游 GDN/KDA 精选源码
 ├── exercises/                   # 课程可运行代码与 B300 结果
 │   ├── 06-gdn-recurrent-baseline/
-│   └── 07-gdn-chunk-triton-baseline/
+│   ├── 07-gdn-chunk-triton-baseline/
+│   └── 08-gdn-cutedsl-persistent-readable/
 ├── lessons/                     # 交互式 HTML 课程
 ├── reference/                   # 可打印速查
 ├── docs/                        # 深入阅读材料

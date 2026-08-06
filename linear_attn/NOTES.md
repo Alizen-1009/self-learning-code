@@ -14,3 +14,4 @@
 - B300 多人共用；每次 benchmark 前重新检查 GPU 空闲情况，只选择空闲卡，不触碰他人进程。
 - 第 6 课 Phase 1 已在 B300 GPU 0 完成：dense D=128、预处理 q/k/alpha/beta、FP32 V-first state；Triton 与 CuTe DSL 共 8/8 correctness PASS。最大 output rel-L2 `2.820e-5`，最大 final-state rel-L2 `7.921e-8`。
 - 用户确认已基本掌握第 6 课，进入第 7 课。第 7 课选择 C=64，完成 PyTorch exact chunk 与 FLA-style 五阶段 Triton pipeline；B300 4/4 PASS，最大 output rel-L2 `4.219e-3`、state rel-L2 `3.224e-3`。
+- 第 8 课按用户选择实现可运行的 CuTe DSL readable persistent 版本：grid=B×H，一个 CTA 8 warps 持完整 register state，CTA 内 chunk→token recurrent；不含 UMMA/TMEM。B300 4/4 PASS，最大 output rel-L2 `4.165e-5`、state rel-L2 `8.076e-8`。

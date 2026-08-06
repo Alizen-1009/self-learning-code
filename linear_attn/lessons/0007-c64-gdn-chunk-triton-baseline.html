@@ -198,7 +198,7 @@ output = inter + intra</code></pre>
 
       <section>
         <h2>9｜下一步</h2>
-        <p>现在有了“正确但物化很多”的 FLA-style baseline。下一课应先测量各 stage latency 与 HBM intermediates，再决定做 Ainv/WU fusion、state/output fusion，还是进入 CuTe DSL chunk；不凭直觉选择。</p>
+        <p><a href="0008-readable-persistent-cutedsl-gdn.html">第 8 课</a>先隔离 FlashInfer-style 调度：一个 CuTe CTA 持有完整 head state，在 CTA 内按 chunk→token 推进；暂不混入 UMMA/TMEM 与 7-GEMM 复杂度。</p>
       </section>
     </main>
 

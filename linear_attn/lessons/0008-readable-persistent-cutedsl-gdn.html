@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="description" content="可运行的 FlashInfer-style persistent CuTe DSL GDN 教学 kernel，并对比 SM90/SM103 调度。"><title>第 8 课｜Readable Persistent CuTe DSL GDN</title><link rel="stylesheet" href="../assets/course.css"><script src="../assets/quiz.js" defer></script><script src="../assets/code-highlight.js" defer></script></head>
+<body><article class="course-shell">
+<header class="lesson-header"><p class="eyebrow">Linear Attention Kernel Course · Lesson 08</p><h1>Readable Persistent<br>CuTe DSL GDN</h1><p class="deck">把第 6 课的 8 个 one-warp CTAs 合并为一个 8-warps CTA：一个 sequence/head CTA 持有完整 state，并在内部按 chunk→token 推进。</p><div class="lesson-meta"><span class="pill">B300 / SM103 实测</span><span class="pill">CuTe DSL</span><span class="pill">4 / 4 PASS</span></div></header>
+<nav class="lesson-nav"><a href="0007-c64-gdn-chunk-triton-baseline.html">上一课</a><a href="#mapping">CTA Mapping</a><a href="#loop">Persistent Loop</a><a href="#sm90">SM90 对比</a><a href="#results">结果</a><a href="../reference/gdn-persistent-cutedsl.html">速查</a></nav>
+<main>
+<section><h2>本课边界</h2><div class="objective"><span class="label">它是什么</span><p>可运行的 FlashInfer-style 调度教学 kernel：<code>grid=B×H</code>、一个 CTA 持有一个完整 head state、chunks 在 CTA 内串行。</p></div><div class="callout"><span class="label">它不是什么</span><p>不是高性能 chunk kernel：内部仍逐 token recurrence，没有 KK/QK/Ainv/W/U、UMMA、TMEM 或 TMA。</p></div><p>代码：<a href="../exercises/08-gdn-cutedsl-persistent-readable/README.md"><code>exercises/08-gdn-cutedsl-persistent-readable/</code></a></p></section>
+
+<section id="mapping"><h2>1｜一个 CTA 如何持有完整 state</h2><div class="equation">grid = B × H<br>block = 8 warps × 32 = 256 threads</div><p>完整 state 是 <code>[V,K]=[128,128]</code>。CTA 的 8 个 warps 各负责 16 个 V rows：</p><pre><code>warp 0 → V[  0: 16], all K[0:128]
+warp 1 → V[ 16: 32], all K[0:128]
+...
+warp 7 → V[112:128], all K[0:128]</code></pre><p>每 warp 内仍使用第 6 课的逻辑 <code>2×16</code> lane layout；每线程持有 <code>8 V rows × 8 K values = 64 FP32</code> state values。8 个 warps 合起来覆盖完整 128×128 state，且不同 V rows 不需要跨 warp 通信。</p></section>
+
+<section id="loop"><h2>2｜代码中的 persistent schedule</h2><pre><code class="language-python"># one CTA owns one (batch, head)
+head = block % H
+batch = block // H
+v_offset = warp_idx * 16
+state_tile = load_state_rows_to_registers(v_offset)
+
+for chunk in range(T // 64):
+    for local_t in range(64):
+        token = chunk * 64 + local_t
+        q, k = load_full_qk_for_this_warp(token)
+        v_tile = load_16_values(token, v_offset)
+        state_tile = recurrent_gdn_step(state_tile, q, k, v_tile)
+        store_16_outputs(token, v_offset)
+
+store_final_state_rows(state_tile)</code></pre><p>和第 6 课的差别只有 grid/ownership：</p><table class="matrix-table"><tr><td>版本</td><td>Grid</td><td>一个 CTA</td></tr><tr><td>第 6 课</td><td>B×H×8</td><td>1 warp，16 V rows</td></tr><tr><td>第 8 课</td><td>B×H</td><td>8 warps，完整 V=128</td></tr></table><p>代价是每个 warp 都重复加载完整 q/k；收益是完整 state 在一个 CTA 内，调度形状接近 FlashInfer。</p></section>
+
+<section><h2>3｜与 FlashInfer SM103 的关系</h2><div class="two-column"><div class="shape-card"><strong>本课</strong><ul class="small"><li>8 warps / CTA</li><li>state 在 registers</li><li>token recurrent loop</li><li>无 UMMA/TMEM/TMA</li></ul></div><div class="shape-card"><strong>FlashInfer SM103</strong><ul class="small"><li>12 warps / CTA</li><li>state 在 TMEM</li><li>C=64 的 7-GEMM chunk</li><li>TMA + UMMA + mbarrier</li></ul></div></div><p>共享的核心不是具体指令，而是：</p><div class="equation">one sequence/head CTA<br>state stays on-chip<br>chunks advance serially inside CTA</div></section>
+
+<section id="sm90"><h2>4｜SM90 并行方式对比</h2><p>FlashInfer SM90 普通 prefill 同样是一 CTA 对应一个 sequence/head，但配置为：</p><div class="equation">grid = num_sequences × num_heads<br>block = 4 warp groups × 128 = 512 threads</div><table class="matrix-table"><tr><td>Warp Group</td><td>职责</td></tr><tr><td>WG0 LD/ST</td><td>TMA Q/K/V、alpha、beta、output store</td></tr><tr><td>WG1 STATE0</td><td>state/output WGMMA</td></tr><tr><td>WG2 STATE1</td><td>state/output WGMMA</td></tr><tr><td>WG3 AUX</td><td>KK/QK/triangular inverse</td></tr></table><p>SM90 没有 TMEM，state 主要存在两个 state-math warp groups 的 WGMMA register fragments；SM103 使用 TMEM 降低 accumulator register pressure。两者都在 CTA 内按 chunk 串行，并重叠下一 chunk 的 load/local preparation。</p><div class="callout"><span class="label">低并行度例外</span><p>SM90 还可以由 <code>use_cp=auto</code> 选择 Context-Parallel 路径，把 sequence partitions/chunks 并行计算局部 affine transfer，再做 scan/fixup；当前 SM100/SM103 dispatch 不走该 CP heuristic。</p></div></section>
+
+<section id="results"><h2>5｜B300 correctness</h2><table class="matrix-table"><tr><td>Shape</td><td>State</td><td>output rel-L2</td><td>state rel-L2</td><td>状态</td></tr><tr><td>[1,64,1,128]</td><td>zero</td><td>4.075e-9</td><td>8.074e-8</td><td>PASS</td></tr><tr><td>[1,64,4,128]</td><td>random</td><td>1.402e-7</td><td>7.834e-8</td><td>PASS</td></tr><tr><td>[1,128,2,128]</td><td>zero</td><td>4.165e-5</td><td>7.521e-8</td><td>PASS</td></tr><tr><td>[2,128,4,128]</td><td>random</td><td>1.573e-5</td><td>8.076e-8</td><td>PASS</td></tr></table><p>4/4 PASS；最大 output rel-L2 <code>4.165e-5</code>，最大 state rel-L2 <code>8.076e-8</code>。</p></section>
+
+<section><h2>6｜实践任务</h2><ol><li>在代码中找到 <code>block→batch/head</code> 与 <code>warp_idx→V tile</code> 映射。</li><li>解释为什么 8 个 warps 不需要同步 state。</li><li>统计每个 token 被重复加载 q/k 的次数。</li><li>将一个 CTA 改回 4 warps、每 warp 32 V rows，先预测 register pressure，再运行验证。</li></ol><p><a href="../exercises/08-gdn-cutedsl-persistent-readable/persistent_cutedsl.py">打开 persistent_cutedsl.py</a></p></section>
+
+<section><h2>7｜立即检索</h2><form class="quiz quiz-form"><fieldset class="quiz-question" data-answer="head" data-explanation="grid=B×H，所以一个 CTA 绑定一个 batch/head。"><legend>1. 一个 CTA 对应什么？</legend><label class="option"><input type="radio" name="q1" value="head">一个序列头部</label><label class="option"><input type="radio" name="q1" value="chunk">一个独立分块</label><label class="option"><input type="radio" name="q1" value="token">一个单独令牌</label></fieldset><fieldset class="quiz-question" data-answer="rows" data-explanation="每 warp 拥有不重叠的 V rows，而每个 V row 的 recurrence 独立。"><legend>2. 为什么 warp 间不需要共享 state？</legend><label class="option"><input type="radio" name="q2" value="rows">V 行互不重叠</label><label class="option"><input type="radio" name="q2" value="empty">状态始终为空</label><label class="option"><input type="radio" name="q2" value="const">状态从不更新</label></fieldset><fieldset class="quiz-question" data-answer="tmem" data-explanation="生产 SM103 将完整 state 放 TMEM，并用 UMMA 执行 chunk GEMM。"><legend>3. 生产 SM103 相比本课最关键的升级是什么？</legend><label class="option"><input type="radio" name="q3" value="tmem">TMEM 与 UMMA</label><label class="option"><input type="radio" name="q3" value="cpu">CPU 多线程</label><label class="option"><input type="radio" name="q3" value="fp64">FP64 累加</label></fieldset><button type="submit">检查答案</button><p class="feedback" role="status" aria-live="polite"></p></form></section>
+</main>
+<footer class="lesson-footer"><p><strong>代码：</strong><a href="../exercises/08-gdn-cutedsl-persistent-readable/baseline_report.md">baseline_report.md</a></p><p>本课证明调度与 state residency；下一步才是将 recurrent body 替换为真正的 C=64 UMMA chunk pipeline。</p></footer>
+</article></body></html>

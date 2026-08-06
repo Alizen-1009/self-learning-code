@@ -1,0 +1,14 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Persistent CuTe GDN 速查</title><link rel="stylesheet" href="../assets/course.css"></head><body><article class="course-shell"><header class="lesson-header"><p class="eyebrow">Quick Reference · Lesson 08</p><h1>Persistent CuTe GDN<br>调度速查</h1></header><nav class="lesson-nav"><a href="../lessons/0008-readable-persistent-cutedsl-gdn.html">第 8 课</a></nav><main><section><h2>教学 SM103-style</h2><pre><code>grid = B×H
+block = 8 warps
+warp w → V[16w:16w+16], all K
+state [128,128] distributed in registers
+CTA loop: chunk → token</code></pre></section><section><h2>Production SM103</h2><pre><code>12 warps
+state → TMEM
+Q/K/V → TMA/SMEM
+7 GEMMs → UMMA
+chunks serial, pipeline overlapped</code></pre></section><section><h2>Production SM90</h2><pre><code>grid = sequence×head
+block = 4 warpgroups = 512 threads
+WG0 load/store
+WG1/WG2 state math registers
+WG3 KK/QK/inverse
+WGMMA; no TMEM</code></pre></section><section><h2>B300 result</h2><div class="equation">4/4 PASS<br>max output rel-L2 4.165e-5<br>max state rel-L2 8.076e-8</div></section></main><footer class="lesson-footer"><p>共享原则：one sequence/head CTA + on-chip state + serial chunks；硬件实现因 SM90/SM103 而不同。</p></footer></article></body></html>
