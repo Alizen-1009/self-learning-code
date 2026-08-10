@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>参考 · ReplaySSM 术语表</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<div class="course-shell">
+
+<header class="lesson-header">
+  <p class="eyebrow">Reference · 术语表</p>
+  <h1>ReplaySSM 术语表</h1>
+  <p class="deck">本工作区所有课程统一使用这里的定义。与 <a href="../../linear_attn/reference/glossary.html" style="color:#c8e4db">linear_attn 术语表</a> 互补：那份覆盖 prefill / chunk，这份覆盖 decode。</p>
+</header>
+
+<main>
+
+<section>
+  <h2>核心概念</h2>
+
+  <h3>Summary route（摘要路线）</h3>
+  <p>每步立即把新输入吸收进 recurrent state，然后丢弃原始输入。state 是唯一真相来源。<strong>标准 SSM decode 的做法。</strong>代价：每步读写整个 <code>d×n</code>；有损，不可回滚；串行。</p>
+
+  <h3>History route（历史路线）</h3>
+  <p>把递推展开，state 表示为「一个衰减过的检查点 + 最近若干原始输入的加权和」。与 summary route 数学等价，区别只在于内存里留的是输入还是摘要。<strong>ReplaySSM 的基础。</strong></p>
+
+  <h3>Output-only formulation（仅输出形式）</h3>
+  <p>在 history route 上再用一次结合律 <code>(v k<sup>⊤</sup>) q = v (k<sup>⊤</sup> q)</code>，直接算出 <code>y<sub>t</sub></code>，<strong>完全不物化 state 矩阵</strong>。Mamba-2 走这条路。</p>
+
+  <h3>State-and-output route（状态与输出形式）</h3>
+  <p>仍需要在某些位置物化/读出 state 的形式。<strong>GDN 走这条路</strong>，因为 delta rule 的每一步都需要在两个向量上读出：<code>q<sub>t</sub></code> 出 <code>y<sub>t</sub></code>，<code>k<sub>t</sub></code> 出 <code>u<sub>t</sub></code>。</p>
+
+  <h3>检查点 state（checkpoint state, <code>S<sub>0</sub></code>）</h3>
+  <p>buffer 窗口之前所有历史的摘要，<code>(d, n)</code>。常规 step 中<strong>只读不写</strong>；只在 flush 时更新并写回 HBM。</p>
+
+  <h3>Ring buffer（环形缓冲）</h3>
+  <p>存放最近 <code>h</code> 个 token 原始输入的定长循环队列，容量 <code>L</code>。Mamba-2 存 <code>(v, k)</code>；GDN 存 <code>(u, k, g)</code>。回滚 = 移动写指针。</p>
+
+  <h3>Flush（汇总冲刷）</h3>
+  <p>把 buffer 内的输入汇总进 <code>S<sub>0</sub></code>、清空 buffer、写回 HBM。投机场景判据 <code>h + 2T &gt; L</code>。这是唯一发生 state 写回的时刻，成本被摊薄到 <code>4dn/L</code> 每步。</p>
+
+  <h3>伪 value（<code>u</code>）</h3>
+  <p>GDN 中让更新退化成 <code>S<sub>t</sub> = α<sub>t</sub> S<sub>t−1</sub> + u<sub>t</sub> k<sub>t</sub><sup>⊤</sup></code> 的那个向量。<strong>它就是 delta rule 的修正项</strong> —— 与 WY 表示里的修正向量同源（见 <a href="../../linear_attn/lessons/0003-delta-rule-to-wy.html">linear_attn 第 3 课</a>）。ReplaySSM 的 GDN 版本 cache <code>u</code> 而不是 <code>v</code>。</p>
+</section>
+
+<section>
+  <h2>Decode 与投机解码</h2>
+
+  <h3>Decode（解码步）</h3>
+  <p>序列长度为 1 的前向。chunk 消失，GEMM 退化成 mat-vec，算术强度掉到 ~1 FLOP/byte —— 与 prefill 的 compute-bound 局面相反，这里是 <strong>memory-bound</strong>。</p>
+
+  <h3>投机窗口（<code>T</code>）</h3>
+  <p>一轮投机解码提出的 draft token 数量。ReplaySSM 中它带来 <code>T(T+h)</code> 的额外内积开销 —— 这是换取并行验证付出的代价。</p>
+
+  <h3>State 快照（state snapshot）</h3>
+  <p><strong>ReplaySSM 要消灭的东西。</strong>既有投机解码方案为了能回滚，给每个 draft token 存一份完整 <code>d×n</code> state，搬运量乘上 <code>T</code>，并发被显存挤死。参见 <a href="https://proceedings.mlr.press/v262/wu24a.html">Snakes and Ladders</a>。</p>
+
+  <h3>Masked GEMM（掩码矩阵乘）</h3>
+  <p>投机验证的核心操作：一次算出 cached keys 与全部 draft queries 的内积，用 causal mask 屏蔽不该看到的位置。取代逐 draft 的串行循环。</p>
+
+  <h3>三角求解（triangular solve）</h3>
+  <p>GDN 投机验证中解 <code>u<sub>s</sub> = R<sub>s</sub> − Σ<sub>s′&lt;s</sub> A<sub>s,s′</sub> u<sub>s′</sub></code> 的手段。<code>A</code> 严格下三角，<code>T×T</code> 规模，一次解出全部 <code>T</code> 个修正项。<strong>与 prefill 里 UT transform 求 <code>(I − tril(A))<sup>−1</sup></code> 是同一类操作</strong>，只是这里的"chunk"是投机窗口而不是序列 chunk。</p>
+
+  <h3>TPOT（time per output token）</h3>
+  <p>每输出 token 的时间，decode 阶段的核心端到端指标。注意 <strong>kernel 加速 ≠ TPOT 加速</strong>：MoE 模型里 GDN 层占比低，Amdahl 上限会把收益压到很小（SGLang 实测 Qwen3.5 仅 ~2.3%）。</p>
+</section>
+
+<section>
+  <h2>沿用 linear_attn 的术语</h2>
+  <p>以下概念在 <a href="../../linear_attn/reference/glossary.html">linear_attn 术语表</a>中已定义，本工作区直接沿用，不重复：<strong>chunk、causal mask <code>M</code>、衰减权重矩阵 <code>D</code>、WY 表示、UT transform、gated delta rule、persistent kernel、算术强度</strong>。</p>
+  <div class="callout">
+    <span class="label">对应关系</span>
+    <p>decode 侧的 <code>s<sub>j,t</sub></code> 就是 prefill 侧衰减权重矩阵 <code>D</code> 的<strong>最后一行</strong>。decode 侧的 <code>T×T</code> 三角求解就是 prefill 侧 UT transform 在<strong>投机窗口</strong>上的复用。ReplaySSM 很大程度上是把训练/prefill 的 chunk 技巧搬到 decode。</p>
+  </div>
+</section>
+
+</main>
+
+<footer class="lesson-footer">
+  <p>Primary source：<a href="https://tridao.me/blog/2026/replayssm/">ReplaySSM — Tri Dao</a></p>
+  <p>相关：<a href="./replayssm-equations.html">公式卡</a> · <a href="../lessons/0001-decode-ledger-history-route.html">第 1 课</a> · <a href="../RESOURCES.md">RESOURCES.md</a></p>
+</footer>
+
+</div>
+</body>
+</html>

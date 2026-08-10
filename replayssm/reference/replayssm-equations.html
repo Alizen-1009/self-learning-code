@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>参考 · ReplaySSM 公式卡</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<div class="course-shell">
+
+<header class="lesson-header">
+  <p class="eyebrow">Reference · 速查</p>
+  <h1>ReplaySSM 公式卡</h1>
+  <p class="deck">全部公式取自 <a href="https://tridao.me/blog/2026/replayssm/" style="color:#c8e4db">Tri Dao, ReplaySSM</a>。标注「推导」的条目是本课程补出的，不是原文。</p>
+</header>
+
+<main>
+
+<section>
+  <h2>符号</h2>
+  <div class="shape-grid">
+    <div class="shape-card"><strong>S</strong><span class="shape">(nheads, d, n)</span> recurrent state</div>
+    <div class="shape-card"><strong>S<sub>0</sub></strong><span class="shape">(d, n)</span> 检查点 state（只读）</div>
+    <div class="shape-card"><strong>v, u</strong><span class="shape">(d,)</span> value / 伪 value</div>
+    <div class="shape-card"><strong>k, q</strong><span class="shape">(n,)</span> key / query</div>
+    <div class="shape-card"><strong>h</strong><span class="shape">标量</span> buffer 中已缓存 token 数</div>
+    <div class="shape-card"><strong>L</strong><span class="shape">标量</span> buffer 容量</div>
+    <div class="shape-card"><strong>T</strong><span class="shape">标量</span> 投机窗口长度</div>
+    <div class="shape-card"><strong>a, Δ, g, β</strong><span class="shape">标量/步</span> 衰减与增益门</div>
+  </div>
+</section>
+
+<section>
+  <h2>1 · Mamba-2</h2>
+
+  <h3>Summary route（基线）</h3>
+  <div class="equation">
+    S<sub>t</sub> = a<sub>t</sub> S<sub>t−1</sub> + Δ<sub>t</sub> (v<sub>t</sub> k<sub>t</sub><sup>⊤</sup>) &nbsp;,&nbsp; y<sub>t</sub> = S<sub>t</sub> q<sub>t</sub>
+  </div>
+
+  <h3>History route</h3>
+  <div class="equation">
+    S<sub>t</sub> = Σ<sub>i≤t</sub> ( Π<sub>i&lt;j≤t</sub> a<sub>j</sub> ) Δ<sub>i</sub> (v<sub>i</sub> k<sub>i</sub><sup>⊤</sup>)
+  </div>
+
+  <h3>Output-only formulation</h3>
+  <div class="equation">
+    y<sub>t</sub> = ā<sub>t</sub> (S<sub>0</sub> q<sub>t</sub>) + Σ<sub>j=1..h</sub> s<sub>j,t</sub> v<sub>j</sub> (k<sub>j</sub><sup>⊤</sup> q<sub>t</sub>)
+    <span class="eq-note">pre<sub>j</sub> = Σ<sub>i≤j</sub> Δ<sub>i</sub> &nbsp;·&nbsp; ā<sub>t</sub> = e<sup>A·pre<sub>t</sub></sup> &nbsp;·&nbsp; s<sub>j,t</sub> = Δ<sub>j</sub> e<sup>A(pre<sub>t</sub>−pre<sub>j</sub>)</sup></span>
+  </div>
+
+  <div class="callout">
+    <span class="label">支点</span>
+    <p><code>(v<sub>j</sub> k<sub>j</sub><sup>⊤</sup>) q<sub>t</sub> = v<sub>j</sub> (k<sub>j</sub><sup>⊤</sup> q<sub>t</sub>)</code> —— <code>dn</code> 次乘法变 <code>d+n</code> 次，<code>d×n</code> 矩阵从不物化。</p>
+  </div>
+
+  <p><strong>Buffer 内容：</strong><code>{(v<sub>j</sub>, k<sub>j</sub>)}</code>。<strong>路线：</strong>output-only。</p>
+</section>
+
+<section>
+  <h2>2 · Gated DeltaNet</h2>
+
+  <h3>Summary route（基线）</h3>
+  <div class="equation">
+    S<sub>t</sub> = e<sup>g<sub>t</sub></sup> S<sub>t−1</sub> (I − β<sub>t</sub> k<sub>t</sub> k<sub>t</sub><sup>⊤</sup>) + β<sub>t</sub> (v<sub>t</sub> k<sub>t</sub><sup>⊤</sup>) &nbsp;,&nbsp; y<sub>t</sub> = S<sub>t</sub> q<sub>t</sub>
+    <span class="eq-note">右乘投影矩阵，无法直接展开成"检查点 + 加权和"。</span>
+  </div>
+
+  <h3>替换：cache <code>u</code> 而非 <code>v</code></h3>
+  <div class="equation">
+    S<sub>t</sub> = α<sub>t</sub> S<sub>t−1</sub> + u<sub>t</sub> k<sub>t</sub><sup>⊤</sup>
+    <span class="eq-note">一旦 <code>u<sub>t</sub></code> 已知，形式就回到 Mamba-2，可以展开成衰减检查点 + <code>u<sub>j</sub> k<sub>j</sub><sup>⊤</sup></code> 的加权和。</span>
+  </div>
+
+  <p><strong>Buffer 内容：</strong><code>{(u<sub>j</sub>, k<sub>j</sub>, g<sub>j</sub>)}<sub>j=1..h</sub></code>。<strong>路线：</strong>state-and-output —— 一个 GDN step 需要在<strong>两个</strong>向量上读出（<code>q<sub>t</sub></code> 出 <code>y</code>，<code>k<sub>t</sub></code> 出 <code>u</code>），所以不能只走 output-only。</p>
+
+  <h3>投机验证：T×T 三角求解</h3>
+  <div class="equation">
+    u<sub>s</sub> = R<sub>s</sub> − Σ<sub>s′&lt;s</sub> A<sub>s,s′</sub> u<sub>s′</sub>
+    <span class="eq-note"><code>R<sub>s</sub></code> 只依赖 drafts 与 <code>S<sub>h</sub></code>；<code>A</code> 严格下三角。T 个修正项由<strong>一次三角求解</strong>同时得到，替掉串行循环。</span>
+  </div>
+</section>
+
+<section>
+  <h2>3 · Cache / Flush</h2>
+  <ol class="steps">
+    <li><strong>常规 step：</strong>把新输入 append 进 ring buffer，用内积公式算 <code>y<sub>t</sub></code>。不读写完整 state（只读 <code>S<sub>0</sub></code>）。</li>
+    <li><strong>Flush：</strong>当 <code>h + 2T &gt; L</code> 时，把 buffer 汇总进 <code>S<sub>0</sub></code>、清空 buffer、写回 HBM。<code>2T</code> 是给两轮投机窗口预留余量。</li>
+    <li><strong>投机验证：</strong>draft append 进 buffer，用 masked GEMM 算 cached keys × draft queries。</li>
+    <li><strong>回滚：</strong>调整 buffer 写指针。零 state 恢复，零快照。</li>
+  </ol>
+</section>
+
+<section>
+  <h2>4 · 账本</h2>
+  <table class="matrix-table" style="border-spacing:0;width:100%;font-family:var(--sans);font-size:.88rem">
+    <tr style="background:var(--paper-deep)">
+      <td style="text-align:left;padding:11px"><strong>项</strong></td><td style="padding:11px"><strong>基线</strong></td><td style="padding:11px"><strong>ReplaySSM</strong></td>
+    </tr>
+    <tr><td style="text-align:left;padding:11px">state traffic / head / step</td><td style="padding:11px"><code>8dn</code></td><td style="padding:11px"><code>4dn</code></td></tr>
+    <tr style="background:rgba(255,255,255,.6)"><td style="text-align:left;padding:11px">每 buffer token 的构造 FLOPs</td><td style="padding:11px"><code>dn</code></td><td style="padding:11px"><code>d+n</code>（d=n=128 → 64×）</td></tr>
+    <tr><td style="text-align:left;padding:11px">投机额外内积</td><td style="padding:11px">串行，不可 GEMM</td><td style="padding:11px"><code>T(T+h)</code></td></tr>
+    <tr style="background:rgba(255,255,255,.6)"><td style="text-align:left;padding:11px">buffer 长度上界<span class="small">（推导）</span></td><td style="padding:11px">—</td><td style="padding:11px"><code>h &lt; dn/(d+n)</code> = 64</td></tr>
+  </table>
+
+  <h3>实测（博客 §6）</h3>
+  <p>Nemotron-3（Mamba-2）与 Qwen3.5（GDN），至 550B，H100 / B300：kernel <strong>1.43–1.84×</strong>，端到端 <strong>1.20–1.48×</strong>；投机吞吐 <strong>1.87–1.96×</strong>（对 vLLM baseline 至 2.14×）；固定 HBM 预算并发 <strong>3.0–3.3×</strong>。</p>
+  <p class="small">对照：<a href="https://github.com/sgl-project/sglang/issues/28511">SGLang RFC #28511</a> 的 microbench 为 kernel 1.2–1.5×，但 Qwen3.5 MoE 端到端仅 ~2.3% TPOT —— MoE 中 GDN 层占比低，Amdahl 上限压住了收益。</p>
+</section>
+
+<section>
+  <h2>5 · 生产集成锚点</h2>
+  <p>SGLang（<a href="https://github.com/sgl-project/sglang/issues/28511">RFC #28511</a>，Phase 1 仅 GDN）：</p>
+  <div class="shape-grid">
+    <div class="shape-card"><strong>新 kernel</strong><span class="shape">fused_recurrent_gdn_replayssm_decode</span></div>
+    <div class="shape-card"><strong>开关</strong><span class="shape">--enable-gdn-replayssm</span></div>
+    <div class="shape-card"><strong>buffer 长度</strong><span class="shape">--gdn-replayssm-cache-len</span></div>
+    <div class="shape-card"><strong>CUDA graph 兼容</strong><span class="shape">write_pos 每 forward 只 +1</span></div>
+  </div>
+  <p>改动文件：<code>mem_cache/memory_pool.py</code>、<code>attention/linear/gdn_backend.py</code>、<code>attention/mamba/mamba2_metadata.py</code>（后者让 flush 边界对齐 radix cache 的 snapshot 边界）。KDA 复用同 backend 但 gating 逻辑未实现。</p>
+</section>
+
+</main>
+
+<footer class="lesson-footer">
+  <p>Primary source：<a href="https://tridao.me/blog/2026/replayssm/">ReplaySSM — Tri Dao</a> · 参考实现：<a href="https://github.com/Johnny-Liou/ReplaySSM.git">Johnny-Liou/ReplaySSM</a></p>
+  <p>相关：<a href="./glossary.html">glossary</a> · <a href="../lessons/0001-decode-ledger-history-route.html">第 1 课</a> · <a href="../MISSION.md">MISSION.md</a></p>
+</footer>
+
+</div>
+</body>
+</html>

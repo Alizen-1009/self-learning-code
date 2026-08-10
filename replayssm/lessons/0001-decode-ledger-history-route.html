@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 1 课 · Decode 的账本：summary route vs history route</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<div class="course-shell">
+
+<header class="lesson-header">
+  <p class="eyebrow">ReplaySSM · 第 1 课</p>
+  <h1>Decode 的账本</h1>
+  <p class="deck">你已经会算 prefill 的账。现在换到 decode：state 每步搬进搬出 HBM，算术强度掉到 1 FLOP/byte。ReplaySSM 用一步结合律把这笔账砍掉一半。</p>
+  <div class="lesson-meta">
+    <span class="pill">算法层 · 不写 kernel</span>
+    <span class="pill">约 15 分钟</span>
+    <span class="pill">前置：scalar decay LA</span>
+  </div>
+</header>
+
+<nav class="lesson-nav">
+  <a href="#objective">本课目标</a>
+  <a href="#bridge">你已经知道的</a>
+  <a href="#disease">病灶</a>
+  <a href="#two-routes">两条路线</a>
+  <a href="#pivot">支点</a>
+  <a href="#ledger">账本</a>
+  <a href="#quiz">检查</a>
+  <a href="#retrieval">检索练习</a>
+  <a href="#next">下一课</a>
+</nav>
+
+<main>
+
+<section id="objective">
+  <div class="objective">
+    <span class="label">本课唯一收获</span>
+    <p>能写出 <strong>output-only</strong> 公式，并用它算出三个数字：state traffic <code>8dn → 4dn</code>、每个 buffer token 的 FLOPs 比 <code>dn/(d+n)</code>、以及 cache 长度 <code>L</code> 的上界。</p>
+  </div>
+</section>
+
+<section id="bridge">
+  <h2>你已经知道的</h2>
+  <p class="lede">在 <a href="../../linear_attn/lessons/0002-scalar-decay-to-gated-chunk.html">linear_attn 第 2 课</a> 里，你把带标量衰减的 linear attention 写成了递推：状态吸收历史，输出从状态读出。Mamba-2 的形式和它是同一个东西。</p>
+
+  <div class="equation">
+    S<sub>t</sub> = a<sub>t</sub> S<sub>t−1</sub> + Δ<sub>t</sub> (v<sub>t</sub> k<sub>t</sub><sup>⊤</sup>)  &nbsp;&nbsp;,&nbsp;&nbsp;  y<sub>t</sub> = S<sub>t</sub> q<sub>t</sub>
+    <span class="eq-note">Mamba-2 的 state 更新与读出。<a href="https://tridao.me/blog/2026/replayssm/">Tri Dao, ReplaySSM §1</a></span>
+  </div>
+
+  <div class="shape-grid">
+    <div class="shape-card"><strong>S<sub>t</sub></strong><span class="shape">(nheads, d, n)</span> 每个 head 一个 d×n 矩阵</div>
+    <div class="shape-card"><strong>v<sub>t</sub></strong><span class="shape">(d,)</span> value，列方向</div>
+    <div class="shape-card"><strong>k<sub>t</sub>, q<sub>t</sub></strong><span class="shape">(n,)</span> key / query，行方向</div>
+    <div class="shape-card"><strong>a<sub>t</sub>, Δ<sub>t</sub></strong><span class="shape">标量</span> 衰减与输入增益</div>
+  </div>
+
+  <p>prefill 时你把序列切 chunk，用 GEMM 把这条递推压成矩阵乘 —— 算术强度很高，是 compute-bound。<strong>decode 时序列长度是 1，chunk 没了。</strong>这就是全部麻烦的来源。</p>
+</section>
+
+<section id="disease">
+  <h2>病灶：一个 <code>d×n</code> 的外积，换 <code>d</code> 个输出</h2>
+
+  <p>把 decode 单步的工作量摊开看。设 fp32、<code>d = n = 128</code>，只看一个 head：</p>
+
+  <div class="shape-grid">
+    <div class="shape-card"><strong>搬运</strong><span class="shape">8dn = 128 KiB</span> 读 S<sub>t−1</sub>（4dn）+ 写 S<sub>t</sub>（4dn）</div>
+    <div class="shape-card"><strong>计算</strong><span class="shape">~O(dn) FLOPs</span> 外积 + 缩放加 + 一次 mat-vec 读出</div>
+  </div>
+
+  <p>算术强度落在 <strong>约 1 FLOP/byte</strong> 的量级。现代 GPU 的计算/带宽比是几百比一 —— 这意味着 kernel 的时间几乎全部花在把 state 搬进搬出 HBM。<a href="https://tridao.me/blog/2026/replayssm/">博客 §2</a> 明确指出：在混合模型里，SSM 层反而成了主要瓶颈，而不是 attention 层。</p>
+
+  <div class="callout">
+    <span class="label">另外两个病</span>
+    <p><strong>不可回滚。</strong>state 更新是有损摘要，原始输入被丢掉了。投机解码时 draft 被拒，你没法把 state 退回去。<a href="https://proceedings.mlr.press/v262/wu24a.html">既有做法</a>是每个 draft token 存一份完整 state 快照 —— 搬运量直接乘上投机窗口。</p>
+    <p><strong>串行。</strong>验证 T 个 draft 需要每个位置的中间 state，只能一个一个算。Transformer 那种"一次 batched GEMM 验证全部 draft"的并行度拿不到。</p>
+  </div>
+</section>
+
+<section id="two-routes">
+  <h2>两条路线</h2>
+
+  <p>递推有两种等价的读法。你在 prefill 里其实已经用过第二种，只是没给它起名字。</p>
+
+  <ol class="steps">
+    <li>
+      <h3>Summary route（现状）</h3>
+      <p>每步<strong>立即</strong>把新输入吸收进摘要 <code>S<sub>t−1</sub></code>，然后丢掉输入。摘要是唯一的真相来源。代价：每步都要读写整个 <code>d×n</code>。</p>
+    </li>
+    <li>
+      <h3>History route（ReplaySSM）</h3>
+      <p>把递推展开，写成<strong>一个衰减过的检查点，加上最近若干原始输入的加权和</strong>：</p>
+      <div class="equation">
+        S<sub>t</sub> = Σ<sub>i≤t</sub> ( Π<sub>i&lt;j≤t</sub> a<sub>j</sub> ) Δ<sub>i</sub> (v<sub>i</sub> k<sub>i</sub><sup>⊤</sup>)
+        <span class="eq-note">history route：state 不再被保存，而是从最近输入窗口<strong>现场重建</strong>。<a href="https://tridao.me/blog/2026/replayssm/">博客 §3</a></span>
+      </div>
+      <p>两条路线数学上完全相等。区别只在于<strong>你把什么留在内存里</strong>：摘要，还是输入。</p>
+    </li>
+  </ol>
+
+  <p>光是换成 history route 还不够 —— 如果你老老实实按上式把 <code>S<sub>t</sub></code> 加出来，你仍然物化了一个 <code>d×n</code> 矩阵，什么都没省。真正的节省在下一步。</p>
+</section>
+
+<section id="pivot">
+  <h2>支点：一步结合律</h2>
+
+  <p class="lede">整个方法压在这一行上：</p>
+
+  <div class="equation">
+    (v<sub>j</sub> k<sub>j</sub><sup>⊤</sup>) q<sub>t</sub> &nbsp;=&nbsp; v<sub>j</sub> (k<sub>j</sub><sup>⊤</sup> q<sub>t</sub>)
+    <span class="eq-note">左边：先造 d×n 外积，再 mat-vec。右边：先做长度 n 的内积得一个标量，再缩放长度 d 的向量。</span>
+  </div>
+
+  <p>左边 <code>dn</code> 次乘法，右边 <code>d + n</code> 次。<strong>那个 <code>d×n</code> 的矩阵从来不需要存在。</strong>把它代进 history route，state 就被彻底消掉了：</p>
+
+  <div class="equation">
+    y<sub>t</sub> = ā<sub>t</sub> (S<sub>0</sub> q<sub>t</sub>) + Σ<sub>j=1..h</sub> s<sub>j,t</sub> v<sub>j</sub> (k<sub>j</sub><sup>⊤</sup> q<sub>t</sub>)
+    <span class="eq-note"><strong>output-only formulation</strong>。<a href="https://tridao.me/blog/2026/replayssm/">博客 §3</a></span>
+  </div>
+
+  <div class="shape-grid">
+    <div class="shape-card"><strong>S<sub>0</sub></strong><span class="shape">(d, n)</span> 检查点 state，只读不写</div>
+    <div class="shape-card"><strong>pre<sub>j</sub></strong><span class="shape">= Σ<sub>i≤j</sub> Δ<sub>i</sub></span> Δ 的前缀和</div>
+    <div class="shape-card"><strong>ā<sub>t</sub></strong><span class="shape">= e<sup>A·pre<sub>t</sub></sup></span> 检查点到当前的总衰减</div>
+    <div class="shape-card"><strong>s<sub>j,t</sub></strong><span class="shape">= Δ<sub>j</sub> e<sup>A(pre<sub>t</sub>−pre<sub>j</sub>)</sup></span> 第 j 个输入的相对权重</div>
+  </div>
+
+  <p>注意 <code>s<sub>j,t</sub></code> 的形状：它是<strong>相对距离</strong>的函数，和你在 prefill 里画的那个带衰减的下三角权重矩阵 <code>D</code> 是同一个东西 —— 只不过 decode 时你只需要它的最后一行。</p>
+
+  <pre><code class="language-python"># summary route：每步物化并写回整个 state
+S = a * S + delta * torch.outer(v, k)      # d×n 读 + d×n 写
+y = S @ q                                   # d×n 读（刚写完，可能还在 cache）
+
+# history route + output-only：state 只读检查点，输入进 ring buffer
+buf_k.append(k); buf_v.append(v); buf_d.append(delta)
+kq = buf_k_mat @ q                          # (h,) 每个 h(n) 次乘法
+y  = a_bar * (S0 @ q) + (s_col * kq) @ buf_v_mat   # 外积从未出现
+</code></pre>
+  <p class="citation">伪代码用于对齐公式与数据流，不是官方实现。官方参考实现见 <a href="https://github.com/Johnny-Liou/ReplaySSM.git">Johnny-Liou/ReplaySSM</a>。</p>
+
+  <div class="callout">
+    <span class="label">那 state 什么时候还是要写？</span>
+    <p>buffer 快满时做一次 <strong>flush</strong>：把 buffer 里的输入汇总进 <code>S<sub>0</sub></code>，清空 buffer，把新 <code>S<sub>0</sub></code> 写回 HBM。投机解码下的判据是 <code>h + 2T &gt; L</code>（<code>h</code> 已缓存 token 数，<code>T</code> 投机窗口，<code>L</code> buffer 容量 —— 预留两轮窗口的余量）。<a href="https://tridao.me/blog/2026/replayssm/">博客 §5</a></p>
+  </div>
+</section>
+
+<section id="ledger">
+  <h2>账本：三个数字</h2>
+
+  <table class="matrix-table" style="border-spacing:0;width:100%;font-family:var(--sans);font-size:.9rem">
+    <tr style="background:var(--paper-deep)">
+      <td style="text-align:left;padding:12px"><strong>项</strong></td>
+      <td style="padding:12px"><strong>summary route</strong></td>
+      <td style="padding:12px"><strong>ReplaySSM</strong></td>
+      <td style="padding:12px"><strong>比</strong></td>
+    </tr>
+    <tr>
+      <td style="text-align:left;padding:12px">state traffic / head / step</td>
+      <td style="padding:12px"><code>8dn</code>（读+写）</td>
+      <td style="padding:12px"><code>4dn</code>（只读 S<sub>0</sub>）</td>
+      <td style="padding:12px"><strong>2×</strong></td>
+    </tr>
+    <tr style="background:rgba(255,255,255,.6)">
+      <td style="text-align:left;padding:12px">每个 buffer token 的 state 构造 FLOPs</td>
+      <td style="padding:12px"><code>dn</code> = 16384</td>
+      <td style="padding:12px"><code>d+n</code> = 256</td>
+      <td style="padding:12px"><strong>64×</strong></td>
+    </tr>
+    <tr>
+      <td style="text-align:left;padding:12px">投机验证（T 个 draft）额外内积</td>
+      <td style="padding:12px">串行，无法 GEMM</td>
+      <td style="padding:12px"><code>T(T+h)</code> 二次项</td>
+      <td style="padding:12px">代价</td>
+    </tr>
+  </table>
+
+  <p class="citation">前两行的比值取 <code>d = n = 128</code>。三个数字均出自 <a href="https://tridao.me/blog/2026/replayssm/">博客 §4–§5</a> 的复杂度分析。</p>
+
+  <div class="callout">
+    <span class="label">一次换来三个答案</span>
+    <p><strong>带宽</strong>：不写 state，流量减半。<strong>回滚</strong>：原始输入还在，拒绝 draft 只需把 ring buffer 写指针退回去，零快照。<strong>并行</strong>：<code>y<sub>t</sub></code> 只依赖 <code>S<sub>0</sub></code> 和 buffer，各 draft 位置之间没有串行依赖，验证变成 masked GEMM。</p>
+    <p class="small">实测（Nemotron-3 / Qwen3.5，至 550B，H100 与 B300）：kernel 1.43–1.84×，端到端 1.20–1.48×；投机吞吐 1.87–1.96×；固定 HBM 预算下并发 3.0–3.3×。</p>
+  </div>
+</section>
+
+<section id="quiz">
+  <h2>检查</h2>
+  <form class="quiz-form quiz">
+
+    <fieldset class="quiz-question" data-answer="a" data-explanation="output-only route 只读检查点 S₀、从不写回 state，省掉的正是写的那一半。">
+      <legend>1. state traffic 从 <code>8dn</code> 降到 <code>4dn</code>，省掉的是哪一半？</legend>
+      <label class="option"><input type="radio" name="q1" value="a">写回新状态那一半</label>
+      <label class="option"><input type="radio" name="q1" value="b">读入旧状态那一半</label>
+      <label class="option"><input type="radio" name="q1" value="c">读入查询向量那半</label>
+      <label class="option"><input type="radio" name="q1" value="d">写回输出向量那半</label>
+    </fieldset>
+
+    <fieldset class="quiz-question" data-answer="a" data-explanation="物化外积要 dn 次乘法，内积路线只要 kᵀq 的 n 次加缩放 v 的 d 次；d=n=128 时 16384/256 = 64。">
+      <legend>2. <code>d = n = 128</code> 时 state 构造 FLOPs 约降 64×，这个比值来自？</legend>
+      <label class="option"><input type="radio" name="q2" value="a">外积规模除以内积规模</label>
+      <label class="option"><input type="radio" name="q2" value="b">外积规模除以读写字节</label>
+      <label class="option"><input type="radio" name="q2" value="c">缓存长度除以投机窗口</label>
+      <label class="option"><input type="radio" name="q2" value="d">头维度除以缓存长度和</label>
+    </fieldset>
+
+    <fieldset class="quiz-question" data-answer="a" data-explanation="output-only 公式里 y_t 只用到 S₀ 和 buffer 内的原始输入，不需要任何中间 state，所以各 draft 位置互不依赖，可以一次 masked GEMM 算完。">
+      <legend>3. 为什么 output-only route 能把投机验证变成 batched GEMM？</legend>
+      <label class="option"><input type="radio" name="q3" value="a">输出只依赖缓存输入本身</label>
+      <label class="option"><input type="radio" name="q3" value="b">输出只依赖上一步的状态</label>
+      <label class="option"><input type="radio" name="q3" value="c">输出只依赖当前块的衰减</label>
+      <label class="option"><input type="radio" name="q3" value="d">输出只依赖首个检查点值</label>
+    </fieldset>
+
+    <fieldset class="quiz-question" data-answer="a" data-explanation="原始输入没被丢弃，被拒的 draft 只是 buffer 里尾部几项，把写指针退回去即可，不需要任何 state 快照。">
+      <legend>4. 回滚一个被拒的 draft token，需要做什么？</legend>
+      <label class="option"><input type="radio" name="q4" value="a">把环形缓冲写指针回退</label>
+      <label class="option"><input type="radio" name="q4" value="b">把保存的状态快照恢复</label>
+      <label class="option"><input type="radio" name="q4" value="c">把检查点重新汇总一次</label>
+      <label class="option"><input type="radio" name="q4" value="d">把衰减系数逐位重算过</label>
+    </fieldset>
+
+    <button type="submit">检查答案</button>
+    <p class="feedback"></p>
+  </form>
+</section>
+
+<section id="retrieval">
+  <h2>检索练习（合上公式再做）</h2>
+  <div class="retrieval">
+    <p><strong>问题：</strong>ring buffer 不能无限长。每步你要读 <code>S<sub>0</sub></code>（<code>4dn</code> 字节），也要读 buffer 里 <code>h</code> 个 token 的 <code>k</code> 和 <code>v</code>。<strong>请推出 <code>h</code> 的上界，并算出 <code>d = n = 128</code> 时的数值。</strong></p>
+    <p class="small">提示：先写出 buffer 每步的读取字节数，再要求它不超过读 <code>S<sub>0</sub></code> 的字节数。</p>
+    <button data-reveal-target="answer-1">显示参考答案</button>
+    <div class="reveal" id="answer-1">
+      <p>buffer 每 token 存 <code>k</code>（n 个数）和 <code>v</code>（d 个数），<code>h</code> 个 token 共 <code>4h(d+n)</code> 字节。要求它不超过 <code>4dn</code>：</p>
+      <div class="equation">h (d+n) &lt; d n &nbsp;&nbsp;⟹&nbsp;&nbsp; h &lt; dn / (d+n) = <strong>64</strong></div>
+      <p>同一个 <code>dn/(d+n)</code> 又出现了一次。它既是 FLOPs 的节省倍数，也是 buffer 长度的天花板 —— 因为两者问的是同一个问题：<strong>"一个 d×n 矩阵，值多少个长度 d+n 的向量对？"</strong></p>
+      <p>flush 的写回摊薄成每步 <code>4dn/L</code> 字节，<code>L</code> 取几十时可以忽略。所以 <code>L</code> 太小会 flush 太频繁，太大会让 buffer 读取自己变成瓶颈；最优点在同一个数量级附近。</p>
+      <p class="small"><strong>来源说明：</strong>这条上界是本课的推导，博客给出的是 <code>8dn → 4dn</code> 与 64× 两个事实，未直接写出 <code>L</code> 的上界。SGLang 把它暴露为可调参数 <code>--gdn-replayssm-cache-len</code>（<a href="https://github.com/sgl-project/sglang/issues/28511">RFC #28511</a>），说明实际最优值需要实测。</p>
+    </div>
+  </div>
+</section>
+
+<section id="next">
+  <h2>下一课：GDN 为什么必须 cache <code>u</code></h2>
+  <p>Mamba-2 的更新是"标量衰减 + rank-1 加"，所以直接 cache <code>(v, k)</code> 就够了。GDN 不是：</p>
+  <div class="equation">
+    S<sub>t</sub> = e<sup>g<sub>t</sub></sup> S<sub>t−1</sub> (I − β<sub>t</sub> k<sub>t</sub> k<sub>t</sub><sup>⊤</sup>) + β<sub>t</sub> (v<sub>t</sub> k<sub>t</sub><sup>⊤</sup>)
+    <span class="eq-note">delta rule 在 state 右边乘了一个投影矩阵。cache <code>(v, k)</code> 无法展开成"检查点 + 加权和"。</span>
+  </div>
+  <p>ReplaySSM 的修补是 <strong>cache <code>u</code> 而不是 <code>v</code></strong>，让更新退化回 <code>S<sub>t</sub> = α<sub>t</sub> S<sub>t−1</sub> + u<sub>t</sub> k<sub>t</sub><sup>⊤</sup></code>。这个 <code>u</code> 你其实已经见过 —— 它就是你在 <a href="../../linear_attn/lessons/0003-delta-rule-to-wy.html">WY 表示</a>里推过的那个修正项。下一课把这条线接上，并解释为什么 GDN 只能走 <strong>state-and-output route</strong> 而不是 output-only。</p>
+</section>
+
+<section id="source">
+  <h2>去读一手材料</h2>
+  <div class="callout">
+    <span class="label">Primary source</span>
+    <p><a href="https://tridao.me/blog/2026/replayssm/"><strong>ReplaySSM: Cache SSM Inputs, Not State — Tri Dao</strong></a></p>
+    <p>本课对应 §1–§4。目前<strong>没有对应的 arXiv 论文</strong>，这篇博客就是权威来源。读完 §4 "One change, three answers" 再回来做一次上面的检索练习。</p>
+    <p class="small">延伸：<a href="https://github.com/sgl-project/sglang/issues/28511">SGLang 集成 RFC #28511</a>（生产视角）· <a href="https://github.com/Johnny-Liou/ReplaySSM.git">官方参考实现</a> · <a href="../../replayssm/RESOURCES.md">RESOURCES.md</a></p>
+  </div>
+</section>
+
+</main>
+
+<footer class="lesson-footer">
+  <p><strong>有任何不清楚的地方，直接问我。</strong>我是你这门课的老师 —— 公式哪一步跳了、shape 对不上、想看某个数字怎么算出来的，都可以追问。</p>
+  <p>Mission：<a href="../MISSION.md">MISSION.md</a> · 路线图：<a href="../NOTES.md">NOTES.md</a> · 术语：<a href="../reference/glossary.html">glossary</a> · 公式卡：<a href="../reference/replayssm-equations.html">replayssm-equations</a></p>
+  <p class="small">第 1 课 / 5 · 下一课：GDN 为什么必须 cache <code>u</code></p>
+</footer>
+
+</div>
+<script src="../assets/quiz.js"></script>
+<script src="../assets/code-highlight.js"></script>
+</body>
+</html>
