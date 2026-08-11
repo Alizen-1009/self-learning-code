@@ -353,6 +353,57 @@ def cache_flush_invariants(rng, d=6, n=5, nstep=60):
     return ok
 
 
+# ─────────────────────────────────────────────────────────────────────
+# 6 · Amdahl：kernel 加速 ⇒ 端到端加速（第 5 课）
+# ─────────────────────────────────────────────────────────────────────
+def amdahl_ledger(rng):
+    """符号（第 5 课）：f = GDN decode 占端到端时间的比例，x = 对这一段的局部加速，
+       E = 端到端加速。
+           E(f, x) = 1 / ((1 − f) + f/x)          正向
+           f = (1 − 1/E) / (1 − 1/x)              反推（从实测 E 反推占比）
+           上限 E → 1/(1 − f)  当 x → ∞
+    断言全部是初等代数，但第 5 课引用的每个数字都必须在这里出现过。"""
+    def E(f, x): return 1.0 / ((1 - f) + f / x)
+    def f_from(Eo, x): return (1 - 1 / Eo) / (1 - 1 / x)
+    def ceil_(f): return 1.0 / (1 - f)
+
+    # 恒等式：往返一致 + 直接模拟一致
+    fs = rng.uniform(0.01, 0.95, 200); xs = rng.uniform(1.05, 10.0, 200)
+    worst = max(abs(f_from(E(f, x), x) - f) for f, x in zip(fs, xs))
+    ok = report("Amdahl: f → E → f 往返恒等", worst)
+    # 边界：全部可加速 ⇒ E = x；完全不可加速 ⇒ E = 1
+    worst = max(max(abs(E(1.0, x) - x), abs(E(0.0, x) - 1.0)) for x in xs)
+    ok &= report("Amdahl: 边界 E(1,x)=x 且 E(0,x)=1", worst)
+    # 两条结构性断言：E 永远不超过 x，也永远不超过 1/(1−f)
+    ok &= report("Amdahl: E ≤ x（端到端不超局部）",
+                 max(E(f, x) - x for f, x in zip(fs, xs)), tol=1e-12)
+    ok &= report("Amdahl: E ≤ 1/(1−f)（x→∞ 的上限）",
+                 max(E(f, x) - ceil_(f) for f, x in zip(fs, xs)), tol=1e-12)
+
+    # 锚点 1：SGLang MoE。E = 1.023（+2.3% TPOT），取 microbench 中值 x = 1.35
+    f_moe = f_from(1.023, 1.35)
+    ok &= report("MoE 锚点: E=1.023, x=1.35 ⇒ f≈8.7%", abs(f_moe - 0.0867), tol=1e-3)
+    ok &= report("MoE 锚点: 上限 1/(1−f) ≈ 1.095×", abs(ceil_(f_moe) - 1.095), tol=1e-3)
+    print(f"         └ microbench 区间 x∈[1.2,1.5] ⇒ f∈[{f_from(1.023,1.5):.1%}, "
+          f"{f_from(1.023,1.2):.1%}]，上限∈[{ceil_(f_from(1.023,1.5)):.3f}×, "
+          f"{ceil_(f_from(1.023,1.2)):.3f}×]。")
+
+    # 锚点 2：博客端到端（dense）。两端配对读数
+    f_lo, f_hi = f_from(1.20, 1.43), f_from(1.48, 1.84)
+    ok &= report("dense 锚点: E=1.20, x=1.43 ⇒ f≈55%", abs(f_lo - 0.554), tol=1e-3)
+    ok &= report("dense 锚点: E=1.48, x=1.84 ⇒ f≈71%", abs(f_hi - 0.710), tol=1e-3)
+
+    # 反例：E 与 x 不能乱配。E=1.48 配 x=1.43 ⇒ f > 1，物理不可能
+    ok &= report("反例: E=1.48 配 x=1.43 ⇒ f 必须 > 1",
+                 f_from(1.48, 1.43) - 1.0, expect_equal=False,
+                 extra=f"  f = {f_from(1.48, 1.43):.3f}")
+
+    # 边际递减：f = 8.7% 时把 x 从 1.35 推到 ∞，E 只从 1.023 到 1.095
+    print(f"         └ f=8.7% 时：x=1.35→E={E(f_moe,1.35):.3f}，x=2→{E(f_moe,2):.3f}，"
+          f"x=5→{E(f_moe,5):.3f}，x=∞→{ceil_(f_moe):.3f}。kernel 再快 3.7 倍只多买 3.5%。")
+    return ok
+
+
 def main():
     print(__doc__.split("\n")[0])
     print()
@@ -363,6 +414,7 @@ def main():
         ("3 · 形状判定题", shape_drill_cases),
         ("4 · 投机验证的 T×T 三角求解", speculative_triangular_solve),
         ("5 · Cache / flush 不变量", cache_flush_invariants),
+        ("6 · Amdahl 账本", amdahl_ledger),
     ]:
         print(title)
         # 固定种子，结果可复现；换种子应同样全 PASS

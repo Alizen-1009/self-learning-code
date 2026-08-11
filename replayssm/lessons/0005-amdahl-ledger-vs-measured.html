@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 5 课 · 账本 vs 实测：为什么 MoE 端到端只有 2.3%</title>
+<link rel="stylesheet" href="../assets/course.css">
+<link rel="stylesheet" href="../assets/ledger.css">
+</head>
+<body>
+<div class="course-shell">
+
+<header class="lesson-header">
+  <p class="eyebrow">ReplaySSM · 第 5 课</p>
+  <h1>账本 vs 实测</h1>
+  <p class="deck">前四课算出来的账都很漂亮：kernel 级 1.4–1.8×。但 SGLang 把它接进 Qwen3.5（MoE）后，端到端只快了 <strong>2.3%</strong>。这不是谁算错了 —— 是<strong>两张成绩单量的不是同一个东西</strong>。这一课把换算关系补上，然后回答真正的问题：什么配置才值得写这个 kernel。</p>
+  <div class="lesson-meta">
+    <span class="pill">算法层 · 收官</span>
+    <span class="pill">约 15 分钟</span>
+    <span class="pill">符号预算 3 个（全新增）</span>
+  </div>
+</header>
+
+<nav class="lesson-nav">
+  <a href="#objective">收获</a>
+  <a href="#gap">落差</a>
+  <a href="#law">换算</a>
+  <a href="#inverse">反推</a>
+  <a href="#pairing">配对读数</a>
+  <a href="#calc">算盘</a>
+  <a href="#axes">另两个轴</a>
+  <a href="#quiz">检查</a>
+  <a href="#retrieval">检索</a>
+</nav>
+
+<main>
+
+<section id="objective">
+  <div class="objective">
+    <span class="label">本课唯一收获</span>
+    <p>能从实测的端到端加速<strong>反推</strong>被加速部分的时间占比，用它解释「kernel 1.2–1.5× vs 端到端 2.3%」的落差，并给出「要不要写 kernel」的判断依据。</p>
+  </div>
+  <div class="aside">
+    <p><strong>三个新符号，也是全部符号</strong>：<code>f</code>（GDN decode 占端到端时间的比例）、<code>x</code>（对这一段的局部加速）、<code>E</code>（端到端加速）。前四课的 <code>d n h L T</code> 这一课全部退场 —— 它们的工作已经完成，都被打包进了 <code>x</code>。</p>
+  </div>
+</section>
+
+<section id="gap">
+  <h2>两张成绩单</h2>
+
+  <p>同一套算法，两份实测：</p>
+
+  <table class="ledger">
+    <caption>ReplaySSM 的两份实测（博客 §6 · SGLang RFC #28511）</caption>
+    <thead><tr><th>来源</th><th>模型</th><th>kernel 加速</th><th>端到端</th></tr></thead>
+    <tbody>
+      <tr><th>博客 §6</th><td>Nemotron-3 / Qwen3.5，至 550B</td><td class="win">1.43–1.84×</td><td class="win">1.20–1.48×</td></tr>
+      <tr><th>SGLang RFC</th><td>Qwen3.5（MoE）</td><td class="win">1.2–1.5×（microbench）</td><td class="cost">~2.3% TPOT</td></tr>
+    </tbody>
+  </table>
+
+  <div class="tldr">
+    <p>注意 kernel 那一列：<strong>两边基本一致</strong>。1.2–1.5× 与 1.43–1.84× 是同一个量级 —— kernel 层没有任何矛盾，前四课的账没有算错。</p>
+    <p>分歧全在最后一列。同样的 kernel 加速，一边换来 1.20–1.48×，一边只换来 1.023×。差别不在 kernel，在 <strong>kernel 之外的时间</strong>。</p>
+  </div>
+
+  <p>decode 一个 token 的时间里，GDN 层的 state 读写只是其中一段。对 MoE 模型，大头在别处：expert FFN 的权重搬运、full-attention 层的 KV cache、路由与通信。ReplaySSM 只加速 GDN 那一段 —— <strong>其余部分一纳秒都不会变快</strong>。</p>
+</section>
+
+<section id="law">
+  <h2>换算关系：一行推导</h2>
+
+  <p>把 decode 一个 token 的时间归一化为 1，其中 GDN 段占 <code>f</code>，其余占 <code>1 − f</code>。给 GDN 段加速 <code>x</code> 倍，新的总时间是 <code>(1 − f) + f/x</code>。端到端加速就是两个时间之比：</p>
+
+  <div class="equation is-hero">
+    E = 1 / ( (1 − f) + f/x )
+    <span class="eq-note">Amdahl 定律。整门课最短的推导 —— 但它决定前四课的成果能兑现多少。</span>
+  </div>
+
+  <p>两个立即成立的推论（都已数值验证）：</p>
+
+  <div class="equation">
+    E ≤ x &nbsp;&nbsp;（端到端永远不超过局部加速）<br>
+    E ≤ 1 / (1 − f) &nbsp;&nbsp;（x → ∞ 时的上限：没被加速的部分成为地板）
+    <span class="eq-note">第二条是本课最有杀伤力的一句话：<code>f</code> 一旦定了，<strong>kernel 写得再完美也突破不了 <code>1/(1−f)</code></strong>。</span>
+  </div>
+
+  <p>把公式倒过来，就得到本课真正的工具 —— 从两个<strong>实测值</strong>反推 <code>f</code>：</p>
+
+  <div class="equation">
+    f = ( 1 − 1/E ) / ( 1 − 1/x )
+    <span class="eq-note">E 与 x 都能测：E 来自端到端 benchmark，x 来自 kernel microbench。<code>f</code> 不用 profile 就能估出来。</span>
+  </div>
+</section>
+
+<section id="inverse">
+  <h2>反推：MoE 里的 GDN 只占 9%</h2>
+
+  <p>把 SGLang 的两个实测代进去：<code>E = 1.023</code>（+2.3% TPOT），<code>x</code> 取 microbench 中值 1.35：</p>
+
+  <div class="equation is-hero">
+    f = ( 1 − 1/1.023 ) / ( 1 − 1/1.35 ) ≈ 8.7%
+    <span class="eq-note">取 <code>x</code> 的两端 1.2 / 1.5，则 <code>f</code> 落在 <strong>13.5% / 6.7%</strong> 之间。结论不变：GDN decode 在这个 MoE 模型里只占一成上下。</span>
+  </div>
+
+  <p>2.3% 于是完全说得通 —— 甚至可以说 kernel <strong>已经把能拿的基本拿完了</strong>。看 <code>f = 8.7%</code> 时把 <code>x</code> 继续往上推能买到什么：</p>
+
+  <table class="ledger">
+    <caption>f = 8.7% 时，kernel 加速的边际收益</caption>
+    <thead><tr><th>x（kernel 加速）</th><th>E（端到端）</th><th></th></tr></thead>
+    <tbody>
+      <tr><th>1.35（现状）</th><td>1.023×</td><td class="note">SGLang 实测就在这</td></tr>
+      <tr><th>2</th><td>1.045×</td><td class="note">kernel 再提升 48%，端到端 +2.2%</td></tr>
+      <tr><th>5</th><td>1.075×</td><td class="note"></td></tr>
+      <tr><th>∞</th><td class="cost">1.095×</td><td class="cost">上限 1/(1−f)：地板到了</td></tr>
+    </tbody>
+  </table>
+
+  <div class="tldr">
+    <p>kernel 从 1.35× 推到<strong>无限快</strong>，端到端只从 1.023× 涨到 1.095×。</p>
+    <p>这就是「要不要继续优化 kernel」的答案：对这个 MoE 配置，<strong>不要</strong>。剩下的 91.3% 时间在 expert FFN 和 attention 里，优化预算应该去那边。</p>
+  </div>
+
+  <div class="aside">
+    <p><strong>这个 <code>f</code> 是一阶模型下的有效占比</strong>：假设加速只作用于 GDN 段、其余时间不变，调度与 kernel launch 开销都归进 <code>1 − f</code>。真实系统里各段有重叠与相互影响，所以它是<strong>估计</strong>而非 profile 读数 —— 但做「值不值得」这个量级判断足够了。RFC 自己的判断（dense GDN 模型收益应更大）用的正是同一个逻辑。</p>
+  </div>
+</section>
+
+<section id="pairing">
+  <h2>配对读数：一个必须会做的体检</h2>
+
+  <p>用同一个反推公式检查博客的数字。博客给的是两个区间：kernel 1.43–1.84×，端到端 1.20–1.48×。区间必须<strong>配对</strong>读 —— 低配低、高配高：</p>
+
+  <table class="ledger">
+    <caption>反推博客配置的 f（配对读数）</caption>
+    <thead><tr><th>E（端到端）</th><th>x（kernel）</th><th>反推出的 f</th><th>上限 1/(1−f)</th></tr></thead>
+    <tbody>
+      <tr><th>1.20</th><td>1.43</td><td class="win">≈ 55%</td><td>2.24×</td></tr>
+      <tr><th>1.48</th><td>1.84</td><td class="win">≈ 71%</td><td>3.45×</td></tr>
+      <tr><th>1.48</th><td class="cost">1.43</td><td class="cost">≈ 108% —— 不可能</td><td>—</td></tr>
+    </tbody>
+  </table>
+
+  <p>最后一行是故意错配的：拿区间里最高的 <code>E</code> 配最低的 <code>x</code>，反推出 <code>f &gt; 1</code> —— 被加速部分占了超过 100% 的时间，物理上不可能。这不是博客的问题，是<strong>读数方式</strong>的问题。它同时给了你一个免费的体检工具：</p>
+
+  <div class="callout">
+    <span class="label">看到别人的 benchmark 时</span>
+    <p>先做 <code>E ≤ x</code> 检查，再反推 <code>f</code> 看是否落在 (0, 1) 且符合模型结构的常识。任何「端到端加速超过 kernel 加速」的声明，要么测量有误，要么加速的不止那一段（比如顺带减少了同步或显存压力 —— 那就该在正文里说清楚）。</p>
+  </div>
+
+  <p>反过来看，博客配置反推出 <code>f ≈ 55–71%</code>：它测的是 <strong>SSM 层占大头的 dense 模型</strong>。这与 RFC 的判断互相印证 —— 同一套 kernel，落差完全由 <code>f</code> 解释，两张成绩单从头到尾没有矛盾。</p>
+</section>
+
+<section id="calc">
+  <h2>算盘</h2>
+
+  <p>拖动 <code>f</code> 和 <code>x</code>，看时间条怎么变。预设值就是 SGLang 的 MoE 情形：</p>
+
+  <div class="calc" data-amdahl-calc>
+    <div class="calc-controls is-two">
+      <div class="calc-slider">
+        <label>f · GDN 占端到端时间 <output data-amdahl-echo="f">9%</output></label>
+        <input type="range" data-amdahl-var="f" min="1" max="95" step="1" value="9">
+      </div>
+      <div class="calc-slider">
+        <label>x · kernel 局部加速 <output data-amdahl-echo="x">1.35×</output></label>
+        <input type="range" data-amdahl-var="x" min="1" max="5" step="0.05" value="1.35">
+      </div>
+    </div>
+    <div class="calc-out">
+      <p class="calc-verdict ok" data-amdahl-verdict></p>
+
+      <div class="budget-row">
+        <span>其余部分（不变）</span>
+        <span class="bar" data-amdahl-bar="other"><i></i></span>
+        <span class="budget-num" data-amdahl-out="other">91%</span>
+      </div>
+      <div class="budget-row">
+        <span>GDN 段 · 加速前</span>
+        <span class="bar is-buffer" data-amdahl-bar="gdn-before"><i></i></span>
+        <span class="budget-num" data-amdahl-out="gdn-before">9%</span>
+      </div>
+      <div class="budget-row">
+        <span>GDN 段 · 加速后</span>
+        <span class="bar is-write" data-amdahl-bar="gdn-after"><i></i></span>
+        <span class="budget-num" data-amdahl-out="gdn-after">6.7%</span>
+      </div>
+
+      <table class="ledger">
+        <caption>端到端账</caption>
+        <tbody>
+          <tr><th>加速后总时间（加速前 = 100%）</th><td data-amdahl-out="total-after">97.7%</td></tr>
+          <tr><th>省下的时间 <span class="note">= f·(1 − 1/x)</span></th><td data-amdahl-out="saved">2.3%</td></tr>
+          <tr><th>端到端加速 E</th><td class="win" data-amdahl-out="e2e">1.024×</td></tr>
+          <tr><th>上限 <span class="note">x → ∞，= 1/(1−f)</span></th><td data-amdahl-out="ceiling">1.099×</td></tr>
+        </tbody>
+      </table>
+      <p class="calc-foot">试三个位置：① 预设（MoE 实测）；② <code>f</code> 拉到 55–71%（博客的 dense 配置）—— 同一个 <code>x</code>，端到端立刻到 1.2–1.5×；③ <code>f</code> 不动、<code>x</code> 拉满 —— 看 E 怎么贴着上限不动。</p>
+    </div>
+  </div>
+</section>
+
+<section id="axes">
+  <h2>Amdahl 只压一个轴</h2>
+
+  <p>到这里容易得出一个过头的结论：「MoE 上 ReplaySSM 不值得」。但 2.3% 只是<strong>时间轴</strong>上的读数，而这套东西的收益有三个轴，Amdahl 只管第一个：</p>
+
+  <ul class="invariants">
+    <li>
+      <strong>时间（TPOT）—— 受 f 压制</strong>
+      <p>本课主题。<code>E ≤ 1/(1−f)</code>，MoE 上限 1.095×，dense 上限 2.2–3.5×。这是唯一被 Amdahl 管辖的轴。</p>
+    </li>
+    <li>
+      <strong>显存 / 并发 —— 不受 f 压制</strong>
+      <p>不存 state 快照、buffer 远小于 state，省的是 <strong>HBM 容量</strong>。博客实测：固定 HBM 预算下并发 <strong>3.0–3.3×</strong>。显存省下来就是省下来了，与 GDN 段占多少时间无关 —— <strong>Amdahl 公式里根本没有这一项</strong>。</p>
+    </li>
+    <li>
+      <strong>能力解锁 —— Amdahl 不适用</strong>
+      <p>没有 ReplaySSM 之前，SSM 上的投机解码要么每 draft 存一份 state 快照（Snakes and Ladders，<code>4dn</code>/draft），要么串行验证。ReplaySSM 让投机<strong>变得可做</strong>（吞吐 1.87–1.96×）。「让做不了的事变得可做」不是「把已有环节加速 x 倍」—— 这类收益不在 Amdahl 的管辖范围内，用 <code>f</code> 去折算它是范畴错误。</p>
+    </li>
+  </ul>
+
+  <div class="callout">
+    <span class="label">所以「值不值得」的完整判断是</span>
+    <p><strong>① 先测或反推 <code>f</code>。</strong>dense GDN、长上下文、大 state（d·n·heads 大）⟹ <code>f</code> 大，时间轴收益厚；MoE ⟹ <code>f</code> 小，时间轴收益薄。<strong>② <code>f</code> 小不等于不做</strong> —— 显存/并发轴与投机解锁轴照常兑现，SGLang 照样合并了这个 RFC。<strong>③ 但优化 kernel 的边际投入要看 <code>f</code></strong>：<code>f</code> = 8.7% 时把 kernel 从 1.35× 磨到 2× 只多买 2.2%，这个时间不如花在 expert FFN 上。</p>
+  </div>
+
+  <div class="aside">
+    <p><strong>回到本工作区的正事。</strong>MISSION 里悬着的问题是「要不要开 B300 kernel 分支」。现在有了判断工具：先在目标模型上 profile 出 GDN decode 段的 <code>f</code>，套 <code>E = 1/((1−f) + f/x)</code>，用第 1–4 课的账估 <code>x</code>（带宽账给出的上限约 1.7×）。<code>f·(1 − 1/x)</code> 就是能赚到的全部时间 —— 数字摆出来，做不做一目了然。</p>
+  </div>
+</section>
+
+<section id="quiz">
+  <h2>检查</h2>
+  <form class="quiz-form quiz">
+
+    <fieldset class="quiz-question" data-answer="b" data-explanation="kernel 层两边一致（1.2–1.5× vs 1.43–1.84×），账没有算错。落差全部由 f 解释：MoE 里 GDN decode 只占约 8.7% 的时间，其余 91% 不被加速。">
+      <legend>1. MoE 端到端只有 2.3% 的主要原因是？</legend>
+      <label class="option"><input type="radio" name="q1" value="a">kernel 在生产环境退化到接近一倍</label>
+      <label class="option"><input type="radio" name="q1" value="b">被加速的段只占端到端时间一成</label>
+      <label class="option"><input type="radio" name="q1" value="c">缓存刷新的开销吃掉了带宽收益</label>
+      <label class="option"><input type="radio" name="q1" value="d">投机解码的二次项拖垮了吞吐量</label>
+    </fieldset>
+
+    <fieldset class="quiz-question" data-answer="c" data-explanation="上限 = 1/(1−f) = 1/0.913 ≈ 1.095×。没被加速的 91.3% 是地板，kernel 无限快也突破不了。">
+      <legend>2. <code>f</code> = 8.7% 时，kernel 无限快，端到端最多是？</legend>
+      <label class="option"><input type="radio" name="q2" value="a">约一点二三倍处开始饱和不动</label>
+      <label class="option"><input type="radio" name="q2" value="b">无上限只是增长的速度变慢</label>
+      <label class="option"><input type="radio" name="q2" value="c">约一点零九五倍是硬性的上限</label>
+      <label class="option"><input type="radio" name="q2" value="d">恰好等于局部加速值的一半处</label>
+    </fieldset>
+
+    <fieldset class="quiz-question" data-answer="a" data-explanation="E ≤ x 恒成立。E=1.48 配 x=1.43 反推出 f ≈ 108% > 1，物理不可能 —— 说明区间必须低配低、高配高地配对读。">
+      <legend>3. 拿区间里最高的 E=1.48 配最低的 x=1.43 反推，得到 f ≈ 108%。这说明？</legend>
+      <label class="option"><input type="radio" name="q3" value="a">区间读数必须配对否则推出矛盾</label>
+      <label class="option"><input type="radio" name="q3" value="b">博客的两个区间数字互相矛盾了</label>
+      <label class="option"><input type="radio" name="q3" value="c">反推公式在占比过半时会失效的</label>
+      <label class="option"><input type="radio" name="q3" value="d">端到端里有别的段也被加速过了</label>
+    </fieldset>
+
+    <fieldset class="quiz-question" data-answer="d" data-explanation="Amdahl 只管「把已有环节加速 x 倍」这一个轴。显存/并发（3.0–3.3×）与投机解锁（1.87–1.96×）是另外两个轴：前者省的是容量不是时间，后者是让做不了的事变得可做。">
+      <legend>4. 下面哪项收益<strong>不</strong>受 <code>f</code> 压制？</legend>
+      <label class="option"><input type="radio" name="q4" value="a">GDN 段状态搬运的字节数减半</label>
+      <label class="option"><input type="radio" name="q4" value="b">解码每词元延迟的端到端改善</label>
+      <label class="option"><input type="radio" name="q4" value="c">三角求解压缩掉的串行读出链</label>
+      <label class="option"><input type="radio" name="q4" value="d">固定显存预算下的并发提升数</label>
+    </fieldset>
+
+    <fieldset class="quiz-question" data-answer="b" data-explanation="f = (1−1/E)/(1−1/x)。E 与 x 都是可测量，f 不用 profile 就能估出来 —— 这正是本课反推 MoE f≈8.7% 的做法。">
+      <legend>5. 手里只有端到端实测 <code>E</code> 和 kernel microbench <code>x</code>，怎么估 <code>f</code>？</legend>
+      <label class="option"><input type="radio" name="q5" value="a">必须上性能剖析器逐段测量时间</label>
+      <label class="option"><input type="radio" name="q5" value="b">用一减一比 E 除以一减一比 x</label>
+      <label class="option"><input type="radio" name="q5" value="c">用 E 直接除以 x 得到占比数</label>
+      <label class="option"><input type="radio" name="q5" value="d">用两者之差除以局部加速减一</label>
+    </fieldset>
+
+    <button type="submit">检查答案</button>
+    <p class="feedback"></p>
+  </form>
+</section>
+
+<section id="retrieval">
+  <h2>检索练习（合上讲义）</h2>
+  <div class="retrieval">
+    <p><strong>第一题 · 推导。</strong>从「总时间归一化为 1」出发，写出 <code>E(f, x)</code> 与反推公式 <code>f(E, x)</code>，并说出两个推论（<code>E ≤ x</code>、上限）各自为什么成立。</p>
+
+    <p><strong>第二题 · 反推。</strong>某模型实测端到端 <code>E = 1.10</code>，kernel microbench <code>x = 1.6</code>。求 <code>f</code> 和上限。这个配置继续磨 kernel 值不值？</p>
+
+    <p><strong>第三题 · 决策。</strong>你的 B300 上有个 dense GDN 模型，profile 出 <code>f = 40%</code>，第 1–4 课的账估出 <code>x ≈ 1.7</code>。求端到端 <code>E</code> 与上限，并给出「做不做 kernel 分支」的判断和理由（提示：别忘了另两个轴）。</p>
+
+    <button data-reveal-target="answer-1">显示参考答案</button>
+    <div class="reveal" id="answer-1">
+      <p><strong>1.</strong> 加速后总时间 <code>(1−f) + f/x</code>，故 <code>E = 1/((1−f) + f/x)</code>；解出 <code>f = (1−1/E)/(1−1/x)</code>。<code>E ≤ x</code>：就算 <code>f = 1</code>（全部时间都被加速）也只能得到 <code>x</code>，少一点就更小。上限 <code>1/(1−f)</code>：<code>x → ∞</code> 时 <code>f/x → 0</code>，剩下没被加速的 <code>1−f</code> 成为地板。</p>
+
+      <p><strong>2.</strong> <code>f = (1−1/1.10)/(1−1/1.6) = 0.0909/0.375 ≈ 24%</code>，上限 <code>1/0.758 ≈ 1.32×</code>。已经拿到 1.10×，离 1.32× 的地板不远 —— kernel 从 1.6× 磨到 2× 只能再买几个百分点，边际收益薄，除非另两个轴（显存/投机）有需求，否则优化预算应转向那 76%。</p>
+
+      <p><strong>3.</strong> <code>E = 1/(0.6 + 0.4/1.7) = 1/0.835 ≈ 1.20×</code>，上限 <code>1/0.6 ≈ 1.67×</code>。<strong>值得做</strong>：时间轴一项就有 20% 的端到端收益（与博客 dense 实测的下沿 1.20× 吻合）；且这还没算并发轴（固定 HBM 并发 3.0–3.3×）和投机解锁轴（1.87–1.96×）。判断依据写成一句话：<code>f·(1−1/x) = 0.4 × 0.41 ≈ 16.5%</code> 的总时间是这个 kernel 能赚到的钱。</p>
+      <p class="small">本课全部数字锚点在 <code>code/verify_replayssm_identities.py</code> 第 6 节（9 条，含一条「必须失败」的错配反例）。</p>
+    </div>
+  </div>
+</section>
+
+<section id="source">
+  <h2>去读一手材料</h2>
+  <div class="callout">
+    <span class="label">Primary source</span>
+    <p><a href="https://tridao.me/blog/2026/replayssm/"><strong>ReplaySSM — Tri Dao</strong></a>（§6 Evaluation）+ <a href="https://github.com/sgl-project/sglang/issues/28511"><strong>SGLang RFC #28511</strong></a>。</p>
+    <p>读的时候带着本课的工具：对每个 benchmark 数字先问「这是 <code>x</code> 还是 <code>E</code>」，再问「测的模型 <code>f</code> 大概多少」。RFC 里那句 “dense GDN 模型收益应更大” 现在你可以自己算出来它有多大。</p>
+    <p class="small">注意：博客与 RFC 都<strong>没有</strong>给出 f 的直接测量；本课的 8.7%、55–71% 都是用 Amdahl 反推的估计（一阶模型），已标注。</p>
+  </div>
+</section>
+
+<section id="next">
+  <h2>算法层到此收官</h2>
+  <p>五课的账合起来：<strong>带宽</strong>（8dn→4dn，第 1 课）→ <strong>形状</strong>（u 修复展开，第 2 课）→ <strong>并行</strong>（T×T 三角求解，第 3 课）→ <strong>簿记</strong>（三个不变量与 L 的两侧，第 4 课）→ <strong>兑现</strong>（Amdahl 换算，本课）。MISSION 里「先把算法层的账算清」这个目标已经达成。</p>
+  <p>下一步是你的选择：开 <strong>kernel 实现分支</strong>（Triton decode kernel → B300 benchmark，先 profile 出目标模型的 <code>f</code>），或者先回头补 <code>linear_attn</code> 的 09-capstone（那份 <code>recurrent_gdn_step</code> 还没过）。两条路都在 NOTES 里挂着号。</p>
+</section>
+
+</main>
+
+<footer class="lesson-footer">
+  <p><strong>有任何不清楚的地方，直接问我。</strong>反推公式的推导、「一阶模型」的局限、三个轴的划分，都可以追问。</p>
+  <p>上一课：<a href="./0004-cache-flush-invariants.html">三个不变量</a> · 术语：<a href="../reference/glossary.html">glossary</a> · 公式卡：<a href="../reference/replayssm-equations.html">replayssm-equations</a> · 验证脚本：<code>code/verify_replayssm_identities.py</code></p>
+  <p class="small">第 5 课 / 5 · 算法层收官</p>
+</footer>
+
+</div>
+<script src="../assets/quiz.js"></script>
+<script src="../assets/amdahl-calc.js"></script>
+</body>
+</html>

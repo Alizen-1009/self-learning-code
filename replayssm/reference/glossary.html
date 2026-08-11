@@ -66,6 +66,9 @@
 
   <h3>TPOT（time per output token）</h3>
   <p>每输出 token 的时间，decode 阶段的核心端到端指标。注意 <strong>kernel 加速 ≠ TPOT 加速</strong>：MoE 模型里 GDN 层占比低，Amdahl 上限会把收益压到很小（SGLang 实测 Qwen3.5 仅 ~2.3%）。</p>
+
+  <h3>Amdahl 换算（<code>f</code> / <code>x</code> / <code>E</code>）</h3>
+  <p>第 5 课符号：<code>f</code> = GDN decode 占端到端时间比例，<code>x</code> = 局部（kernel）加速，<code>E</code> = 端到端加速。<code>E = 1/((1−f) + f/x)</code>，反推 <code>f = (1−1/E)/(1−1/x)</code>，上限 <code>1/(1−f)</code>。两条体检规则：<strong><code>E ≤ x</code> 恒成立</strong>；区间读数必须<strong>配对</strong>（错配会推出 <code>f &gt; 1</code>）。MoE 实测反推 <code>f ≈ 8.7%</code>（上限 1.095×），博客 dense 配置 <code>f ≈ 55–71%</code>。Amdahl 只压<strong>时间轴</strong>：显存/并发（3.0–3.3×）与投机解锁（1.87–1.96×）不受 <code>f</code> 压制。见<a href="../lessons/0005-amdahl-ledger-vs-measured.html">第 5 课</a>。</p>
 </section>
 
 <section>
@@ -81,7 +84,7 @@
 
 <footer class="lesson-footer">
   <p>Primary source：<a href="https://tridao.me/blog/2026/replayssm/">ReplaySSM — Tri Dao</a></p>
-  <p>相关：<a href="./replayssm-equations.html">公式卡</a> · <a href="../lessons/0001-decode-byte-ledger.html">第 1 课</a> · <a href="../lessons/0002-gdn-pseudo-value.html">第 2 课</a> · <a href="../lessons/0003-triangular-solve-speculative.html">第 3 课</a> · <a href="../lessons/0004-cache-flush-invariants.html">第 4 课</a> · <a href="../RESOURCES.md">RESOURCES.md</a></p>
+  <p>相关：<a href="./replayssm-equations.html">公式卡</a> · <a href="../lessons/0001-decode-byte-ledger.html">第 1 课</a> · <a href="../lessons/0002-gdn-pseudo-value.html">第 2 课</a> · <a href="../lessons/0003-triangular-solve-speculative.html">第 3 课</a> · <a href="../lessons/0004-cache-flush-invariants.html">第 4 课</a> · <a href="../lessons/0005-amdahl-ledger-vs-measured.html">第 5 课</a> · <a href="../RESOURCES.md">RESOURCES.md</a></p>
 </footer>
 
 </div>

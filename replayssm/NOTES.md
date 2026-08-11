@@ -14,19 +14,19 @@
 - 不因"看懂讲解"记录已掌握；必须有练习答案或代码产出作为证据才写 learning record。
 - **符号预算（2026-08-11 重写第 1 课后确立，见 `learning-records/0001`）**：每课 header 声明符号数，>12 就拆课；新符号首次出现必须当场承担推理，只用一次的一律移交 reference；正文禁用内联下标，下标只进公式框。能写成数字的写成数字。
   - 补充（见 `learning-records/0003`）：**引入新符号前先 `grep` 全工作区确认未被占用**（第 3 课的 `L` 撞了 buffer 容量，已改 `C`）。预算可以破，但必须在讲义里写明破了、为什么、代价是什么。
-- **命名对照**（三方易撞，固定如下）：T×T 耦合矩阵 = `C`（博客 `A_{s,s'}`）· 衰减门 = `a`（博客 `A`/`e^g`）· buffer 容量 = `L`（不动）。
+- **命名对照**（三方易撞，固定如下）：T×T 耦合矩阵 = `C`（博客 `A_{s,s'}`）· 衰减门 = `a`（博客 `A`/`e^g`）· buffer 容量 = `L`（不动）· 第 5 课 Amdahl 符号 = `f` / `x` / `E`（已 grep 确认未撞名；`s` 被第 3 课投机下标占用，故局部加速用 `x` 不用 `s`）。
 
 ## 本工作区决策
 
 - 用户选择 **「先建立算法层理解」**，明确本阶段不写 kernel。第 1 课起以推导 + 账本 + 检索练习为主。
 - 用户开场即要求两件事：ReplaySSM 与 GDN 的关系、学习路线。两者已在会话中回答；GDN 的 `u` 替换正式教学放在第 2 课。
 - `assets/` 直接复用 `../linear_attn/assets/` 的 `course.css`、`quiz.js`、`code-highlight.js`，保证两个工作区视觉与交互一致。**`course.css` 与 linear_attn 逐字节相同，永不在此修改** —— 本工作区的新样式一律进独立组件表。
-- 本工作区新增组件：`assets/ledger.css`（账本视觉语言：字节预算条 `.budget`、路线对比 `.routes`、账本表 `.ledger`、三答案卡 `.answers`、旁注 `.aside`、支点公式 `.equation.is-hero`、形状判定 `.drill`）、`assets/ledger-calc.js`（`data-ledger-calc`，d/n/h 三滑块搬运账）、`assets/shape-drill.js`（`data-shape-drill`，每项 `data-ok` + `data-why`，点击即刻反馈）、`assets/spec-calc.js`（`data-spec-calc`，T/h 投机开销账）、`assets/flush-calc.js`（`data-flush-calc`，d/n/L/T 的 flush 周期与 L 两侧约束）。后续课程优先复用这五个。
+- 本工作区新增组件：`assets/ledger.css`（账本视觉语言：字节预算条 `.budget`、路线对比 `.routes`、账本表 `.ledger`、三答案卡 `.answers`、旁注 `.aside`、支点公式 `.equation.is-hero`、形状判定 `.drill`）、`assets/ledger-calc.js`（`data-ledger-calc`，d/n/h 三滑块搬运账）、`assets/shape-drill.js`（`data-shape-drill`，每项 `data-ok` + `data-why`，点击即刻反馈）、`assets/spec-calc.js`（`data-spec-calc`，T/h 投机开销账）、`assets/flush-calc.js`（`data-flush-calc`，d/n/L/T 的 flush 周期与 L 两侧约束）、`assets/amdahl-calc.js`（`data-amdahl-calc`，f/x 双滑块的端到端加速账，含时间分解条与上限）。后续课程优先复用这六个。
 - `ledger.css` 另含状态机图 `.fsm`（`.fsm-step` / `.is-guard` / `.is-flush` / `.fsm-branch`）与不变量卡 `.invariants`，第 5 课若要画 Amdahl 分解可复用 `.ledger` 与 `.budget`。
 - ⚠️ **`flush-calc.js` 的分工不要合并**：搬运账固定按非投机稳态算，`T` 只驱动下界。混进去会得到 8×–20× 的假收益（见 `learning-records/0004`）。
 - 两个 reference 卡都要 link `ledger.css`（公式卡已用 `.ledger`/`.invariants`/`.is-hero`）。
 - 三角矩阵可视化直接复用 `course.css` 的 `.matrix-table` + `.diagonal`/`.history`/`.future` —— 那是 linear_attn 为 prefill 衰减矩阵 `D` 设计的，在这里刚好把「同一个 UT transform」的连续性看出来。
-- **`code/verify_replayssm_identities.py`**：讲义所有代数断言的可执行证据（fp64，容差 1e-13，含两条「必须失败」的反例测试）。**规矩：先让脚本 PASS，再写进讲义。**第 1 课那句错话就是因为没走这一步。
+- **`code/verify_replayssm_identities.py`**：讲义所有代数断言的可执行证据（fp64，容差 1e-13，含三条「必须失败」的反例测试：照搬 `v` 展开、违反 flush 判据、Amdahl 区间错配）。**规矩：先让脚本 PASS，再写进讲义。**第 1 课那句错话就是因为没走这一步。
 
 ## 路线图（algorithm-first）
 
@@ -36,9 +36,9 @@
 | 2 | 修一个被破坏的形状（`0002-gdn-pseudo-value.html`） | 能推出 `u = β(v − α·Sk)`，对应到 WY 修正项，并说明代价**不是带宽**而是串行纠缠 | 已交付 2026-08-11 |
 | 3 | 一次三角求解，砍断串行链（`0003-triangular-solve-speculative.html`） | 能分离出 `R` 与 `C`、写出 `(I+C)U = R`，并说清收益是「压缩」而非「消灭」串行。已补上 `w(i→j)` 箭头记号与 `2Th+T²` 账本 | 已交付 2026-08-11 |
 | 4 | 三个不变量（`0004-cache-flush-invariants.html`） | 能凭记忆画出状态机、说出三条不变量「破了会怎样」、从两侧夹出 `L`。已补 `L* = √(2dn/(d+n))` | 已交付 2026-08-11 |
-| 5 | 账本 vs 实测：为什么 MoE 端到端只有 2.3% | 用 Amdahl 解释 kernel 加速与端到端加速的落差 | 待开 |
+| 5 | 账本 vs 实测：为什么 MoE 端到端只有 2.3%（`0005-amdahl-ledger-vs-measured.html`） | 能用 `f = (1−1/E)/(1−1/x)` 反推占比、解释 kernel↔端到端落差、区分 Amdahl 管辖的时间轴与不受压制的显存/解锁轴 | 已交付 2026-08-11 |
 
-之后若用户想动手，再开 kernel 实现分支（Triton decode kernel → B300 benchmark），届时需更新 MISSION 的 Out of scope。
+**算法层五课已收官。**之后若用户想动手，再开 kernel 实现分支（先 profile 目标模型的 `f` → Triton decode kernel → B300 benchmark），届时需更新 MISSION 的 Out of scope。
 
 ## 教学轴：数学 vs 簿记（第 1 课后追问引出）
 

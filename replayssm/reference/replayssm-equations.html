@@ -244,6 +244,24 @@
   <h3>实测（博客 §6）</h3>
   <p>Nemotron-3（Mamba-2）与 Qwen3.5（GDN），至 550B，H100 / B300：kernel <strong>1.43–1.84×</strong>，端到端 <strong>1.20–1.48×</strong>；投机吞吐 <strong>1.87–1.96×</strong>（对 vLLM baseline 至 2.14×）；固定 HBM 预算并发 <strong>3.0–3.3×</strong>。</p>
   <p class="small">对照：<a href="https://github.com/sgl-project/sglang/issues/28511">SGLang RFC #28511</a> 的 microbench 为 kernel 1.2–1.5×，但 Qwen3.5 MoE 端到端仅 ~2.3% TPOT —— MoE 中 GDN 层占比低，Amdahl 上限压住了收益。</p>
+
+  <h3>Amdahl 换算<span class="small">（第 5 课 · f = GDN 占比，x = 局部加速，E = 端到端）</span></h3>
+  <div class="equation is-hero">
+    E = 1 / ( (1 − f) + f/x ) &nbsp;&nbsp;⟹&nbsp;&nbsp; f = ( 1 − 1/E ) / ( 1 − 1/x )
+    <span class="eq-note">上限 <code>E → 1/(1−f)</code> 当 <code>x → ∞</code>；且 <code>E ≤ x</code> 恒成立。区间读数必须<strong>配对</strong>：拿 E=1.48 错配 x=1.43 会反推出 <code>f ≈ 108%</code>，物理不可能。</span>
+  </div>
+  <table class="ledger">
+    <caption>反推的 f（估计，一阶模型 —— 非原文数字）</caption>
+    <thead><tr><th>配置</th><th>E 实测</th><th>x 实测</th><th>f</th><th>上限 1/(1−f)</th></tr></thead>
+    <tbody>
+      <tr><th>SGLang · Qwen3.5 MoE</th><td>1.023</td><td>1.35（中值）</td><td class="cost">≈ 8.7%（区间 6.7–13.5%）</td><td class="cost">1.095×</td></tr>
+      <tr><th>博客 dense · 下沿</th><td>1.20</td><td>1.43</td><td class="win">≈ 55%</td><td>2.24×</td></tr>
+      <tr><th>博客 dense · 上沿</th><td>1.48</td><td>1.84</td><td class="win">≈ 71%</td><td>3.45×</td></tr>
+    </tbody>
+  </table>
+  <p class="small"><strong>边际收益（f=8.7%）：</strong>x=1.35→E=1.023，x=2→1.045，x=5→1.075，x=∞→1.095 —— kernel 无限快只多买 7%。<br>
+  <strong>Amdahl 只压时间轴：</strong>显存/并发（固定 HBM 3.0–3.3×）与投机解锁（1.87–1.96×）不受 <code>f</code> 压制 —— 前者省的是容量，后者是「让做不了的事变得可做」，都不在 Amdahl 管辖范围内。<br>
+  数值锚点见 <code>code/verify_replayssm_identities.py</code> 第 6 节。</p>
 </section>
 
 <section>
@@ -262,7 +280,7 @@
 
 <footer class="lesson-footer">
   <p>Primary source：<a href="https://tridao.me/blog/2026/replayssm/">ReplaySSM — Tri Dao</a> · 参考实现：<a href="https://github.com/Johnny-Liou/ReplaySSM.git">Johnny-Liou/ReplaySSM</a></p>
-  <p>相关：<a href="./glossary.html">glossary</a> · <a href="../lessons/0001-decode-byte-ledger.html">第 1 课</a> · <a href="../lessons/0002-gdn-pseudo-value.html">第 2 课</a> · <a href="../lessons/0003-triangular-solve-speculative.html">第 3 课</a> · <a href="../lessons/0004-cache-flush-invariants.html">第 4 课</a> · <a href="../MISSION.md">MISSION.md</a></p>
+  <p>相关：<a href="./glossary.html">glossary</a> · <a href="../lessons/0001-decode-byte-ledger.html">第 1 课</a> · <a href="../lessons/0002-gdn-pseudo-value.html">第 2 课</a> · <a href="../lessons/0003-triangular-solve-speculative.html">第 3 课</a> · <a href="../lessons/0004-cache-flush-invariants.html">第 4 课</a> · <a href="../lessons/0005-amdahl-ledger-vs-measured.html">第 5 课</a> · <a href="../MISSION.md">MISSION.md</a></p>
   <p class="small">标注「推导」的小节由本课程补出，不是博客原文，全部断言由 <code>code/verify_replayssm_identities.py</code> 数值验证（fp64，容差 1e-13）。</p>
 </footer>
 
