@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 2 课 · 修一个被破坏的形状</title>
+<link rel="stylesheet" href="../assets/course.css">
+<link rel="stylesheet" href="../assets/ledger.css">
+</head>
+<body>
+<div class="course-shell">
+
+<header class="lesson-header">
+  <p class="eyebrow">ReplaySSM · 第 2 课</p>
+  <h1>修一个<br>被破坏的形状</h1>
+  <p class="deck">第 1 课的展开有一个从未说出口的前提：更新必须是「标量衰减 + 一个外积」。GDN 的 delta rule 不是这个形状。这一课用三行代数把它修回来，然后算清修好之后真正的代价在哪 —— 剧透：不是带宽。</p>
+  <div class="lesson-meta">
+    <span class="pill">算法层 · 不写 kernel</span>
+    <span class="pill">约 15 分钟</span>
+    <span class="pill">符号预算 12 个（新增 2 个）</span>
+  </div>
+</header>
+
+<nav class="lesson-nav">
+  <a href="#objective">收获</a>
+  <a href="#premise">隐含前提</a>
+  <a href="#drill">形状判定</a>
+  <a href="#broken">GDN 破坏了它</a>
+  <a href="#fix">三行代数</a>
+  <a href="#whatisu">u 是什么</a>
+  <a href="#cost">代价核算</a>
+  <a href="#realcost">真正的代价</a>
+  <a href="#quiz">检查</a>
+  <a href="#retrieval">检索</a>
+</nav>
+
+<main>
+
+<section id="objective">
+  <div class="objective">
+    <span class="label">本课唯一收获</span>
+    <p>能说出三件事：<strong>（一）</strong>第 1 课的展开到底要求什么形状；<strong>（二）</strong><code>u</code> 的定义，以及它为什么就是你推过的 delta rule 修正项；<strong>（三）</strong>修好之后代价出现在哪 —— 并说明为什么<strong>不是</strong>带宽。</p>
+  </div>
+  <div class="aside">
+    <p><strong>新增符号只有两个：</strong><code>β</code>（delta rule 的学习率，标量）和 <code>u</code>（伪 value，长度 d）。GDN 的衰减门我<strong>直接沿用第 1 课的 <code>a</code></strong>，它就是博客里的 <code>e^g</code>，同一个角色，不再新起名字。</p>
+    <p><strong>刻意不碰：</strong><code>T×T</code> 三角求解的推导（第 3 课）、flush 与指针管理（第 4 课）。</p>
+  </div>
+</section>
+
+<section id="premise">
+  <h2>先说清第 1 课的隐含前提</h2>
+
+  <p class="lede">回到第 1 课那条递推，盯住 <code>S</code> 前面那个东西：</p>
+
+  <div class="equation">
+    S ← <strong style="color:var(--warm)">a</strong> · S + (v k<sup>⊤</sup>)
+    <span class="eq-note"><code>a</code> 是一个<strong>标量</strong>。整个展开能成立，全靠这一点。</span>
+  </div>
+
+  <p>展开的时候发生了什么？每一个历史外积 <code>vⱼkⱼ⊤</code> 被后续若干个 <code>a</code> 连乘 —— 而标量乘法可以自由挪位置。于是每个外积都<strong>完好无损地穿过了整条递推</strong>，只是前面挂了一个标量系数。最后再用结合律把 <code>q</code> 收进去，外积就再也不用被造出来。</p>
+
+  <p>所以真正的要求不是"简单"，而是：<strong>每个历史外积必须能原封不动地被拎出来，前面只挂标量。</strong>一旦 <code>S</code> 被乘上某个<em>会把不同通道搅在一起</em>的东西，这条路就断了。</p>
+
+  <p>这个判据比它看起来更有用。下面五条更新式，先自己判一遍再往下读。</p>
+</section>
+
+<section id="drill">
+  <h2>形状判定：哪些能展开？</h2>
+  <p>问题统一是：<strong>它能不能写成「衰减过的检查点 + 最近输入的加权和」，并且那个加权和里只有标量乘向量？</strong>点按钮立刻出对错。</p>
+
+  <div class="drill" data-shape-drill>
+
+    <div class="drill-item" data-ok="true"
+         data-why="这就是第 1 课的形状。a 是标量，每个历史外积原封不动穿过递推，前面只挂标量系数。">
+      <code class="drill-form">S ← a · S + u k<sup>⊤</sup>&nbsp;&nbsp;&nbsp;（a 是标量）</code>
+      <span class="drill-tag">Mamba-2 / 修好之后的 GDN</span>
+    </div>
+
+    <div class="drill-item" data-ok="true"
+         data-why="对角矩阵只是逐通道缩放，不把通道搅在一起 —— 衰减可以整个吸收进 k，于是求和项仍是「标量 × 向量」。已在 code/verify_replayssm_identities.py 数值验证（偏差 4e-16）。这一条正好回答了「衰减是标量还是对角」这个悬而未决的问题：是对角也不影响结论。">
+      <code class="drill-form">S ← S · diag(a) + v k<sup>⊤</sup>&nbsp;&nbsp;&nbsp;（a 是长度 n 的向量）</code>
+      <span class="drill-tag">逐通道衰减</span>
+    </div>
+
+    <div class="drill-item" data-ok="true"
+         data-why="与秩无关。两个外积各自独立地穿过递推，各自展开、各自用一次结合律，最后加起来。已数值验证（偏差 4e-16）。障碍从来不是「每步塞了多少东西」。">
+      <code class="drill-form">S ← a · S + v₁ k₁<sup>⊤</sup> + v₂ k₂<sup>⊤</sup></code>
+      <span class="drill-tag">每步两个外积（rank-2）</span>
+    </div>
+
+    <div class="drill-item" data-ok="false"
+         data-why="这是 GDN。state 被右乘了一个 n×n 矩阵，而且这个矩阵由当前 key 决定 —— 它会把不同通道搅在一起。展开后每个历史外积都夹在一串互不相同的投影矩阵之间，拎不出来，结合律无从下手。下一节处理它。">
+      <code class="drill-form">S ← a · S · (I − β k k<sup>⊤</sup>) + β v k<sup>⊤</sup></code>
+      <span class="drill-tag">Gated DeltaNet 原式</span>
+    </div>
+
+    <div class="drill-item" data-ok="false"
+         data-why="系数依赖 state 自身，递推不再是线性的。展开的第一步（把 S_t 写成历史输入的线性组合）就不成立 —— 连谈结合律的资格都没有。这是个假想例子，用来分清「难展开」和「根本不是线性递推」。">
+      <code class="drill-form">S ← a · S + (v k<sup>⊤</sup>) / ‖S‖&nbsp;&nbsp;&nbsp;（假想）</code>
+      <span class="drill-tag">依赖 state 的归一化</span>
+    </div>
+
+    <p class="drill-score"></p>
+  </div>
+
+  <div class="aside">
+    <p>第 2、3 条是这套练习真正的考点。如果你把它们判成"不能"，说明判据还停在<strong>表面复杂度</strong>上；真正的障碍只有一个 —— <strong>state 是否被某个会混合通道的东西右乘</strong>。</p>
+  </div>
+</section>
+
+<section id="broken">
+  <h2>GDN 破坏了它</h2>
+
+  <div class="equation">
+    S ← a · S · <strong style="color:var(--bad)">(I − β k k<sup>⊤</sup>)</strong> + β (v k<sup>⊤</sup>)
+    <span class="eq-note">delta rule 在 state 的<strong>右边</strong>乘了一个 n×n 投影矩阵，而它由当前 key 决定。<a href="https://tridao.me/blog/2026/replayssm/">Tri Dao, ReplaySSM</a> · 与<a href="../reference/replayssm-equations.html">公式卡 §2</a> 一致</span>
+  </div>
+
+  <p>这个投影矩阵在干一件很合理的事：<strong>先把 key <code>k</code> 方向上的旧内容擦掉，再把新内容写进去。</strong>这就是 delta rule 的「覆盖」语义 —— 也是 GDN 比纯加法式 linear attention 表达力更强的原因。</p>
+
+  <p>但它对我们的展开是灾难。展开两步就能看出来：<code>S₂</code> 里的 <code>v₁k₁⊤</code> 后面跟着 <code>(I − β₂k₂k₂⊤)</code>，<code>S₃</code> 里它后面跟着两个不同的投影矩阵……<strong>每个历史外积都被埋进一串互不相同的矩阵积里，拎不出来。</strong></p>
+
+  <div class="callout">
+    <span class="label">如果硬要照搬第 1 课的公式会怎样</span>
+    <p>把 <code>v</code> 直接塞进第 1 课那个加权和 —— 我跑过：<strong>相对误差 105%</strong>。</p>
+    <p class="small">这不是精度问题，是<strong>算的东西根本不对</strong>。数字来自 <code>code/verify_replayssm_identities.py</code>，该脚本把这条断言写成了「必须失败」的测试。</p>
+  </div>
+</section>
+
+<section id="fix">
+  <h2>三行代数就修回来了</h2>
+
+  <p class="lede">修法出人意料地简单：把那个投影矩阵<strong>乘开</strong>，然后重新分组。</p>
+
+  <pre><code class="language-python"># 从 GDN 原式出发，把 (I − β k k⊤) 乘进去
+  a·S·(I − β k k⊤) + β v k⊤
+= a·S − a·β·(S k) k⊤ + β v k⊤          # 注意 S k k⊤ 里，S k 先算是个长度 d 的向量
+= a·S + [β v − a·β·(S k)] k⊤           # 两个外积合并，它们共用同一个 k⊤
+= a·S + β(v − a·(S k)) k⊤              # 提出 β
+</code></pre>
+
+  <p>括号里那一团就是我们要的东西。给它起个名字：</p>
+
+  <div class="equation is-hero">
+    u ≡ β ( v − a · (S k) ) &nbsp;&nbsp;⟹&nbsp;&nbsp; S ← a · S + u k<sup>⊤</sup>
+    <span class="eq-note">形状回来了 —— 右边正是判定练习第 1 条。<strong>一旦 <code>u</code> 已知，第 1 课的整套公式原封不动可用。</strong></span>
+  </div>
+
+  <p>关键在于：合并那一步之所以成立，是因为 <code>S k k⊤</code> 和 <code>v k⊤</code> <strong>共用同一个 <code>k⊤</code></strong>。所以两个外积能塌成一个。这个巧合是 delta rule 特有的 —— 它擦除的方向和写入的方向是同一个。</p>
+
+  <div class="callout">
+    <span class="label">一个容易漏掉的 <code>a</code></span>
+    <p>注意 <code>a</code> 在括号<strong>里面</strong>：预测要从<strong>已经衰减过</strong>的 state 上读出，因为 delta rule 修正的对象是 <code>a·S</code>，不是 <code>S</code>。</p>
+    <p>写成 <code>β(v − S k)</code> 会怎样？我跑过：<strong>相对误差 31.8%</strong>。错得不够离谱，所以特别危险 —— 这种 bug 在 kernel 里能一路活到 benchmark。</p>
+  </div>
+</section>
+
+<section id="whatisu">
+  <h2><code>u</code> 是什么 —— 你已经见过它</h2>
+
+  <p>把定义拆开读：</p>
+
+  <div class="shape-grid">
+    <div class="shape-card"><strong>a · (S k)</strong><span class="shape">预测</span> 拿当前 key 去查旧 state，得到"它以前存的是什么"</div>
+    <div class="shape-card"><strong>v − a·(S k)</strong><span class="shape">误差</span> 目标值减预测值</div>
+    <div class="shape-card"><strong>β</strong><span class="shape">学习率</span> 这一步要把误差修正多少</div>
+    <div class="shape-card"><strong>u</strong><span class="shape">修正量</span> 学习率 × 误差</div>
+  </div>
+
+  <p class="lede">这就是 delta rule 本身 —— 学习率乘以预测误差。你在 <a href="../../linear_attn/lessons/0003-delta-rule-to-wy.html">linear_attn 第 3 课</a> 推 WY 表示时算的那个修正向量，和这里的 <code>u</code> 是同一个东西。</p>
+
+  <p>所以 ReplaySSM 对 GDN 的改动，用一句话就能说完：</p>
+
+  <div class="tldr">
+    <p>缓存<strong>修正量</strong>，而不是缓存<strong>目标值</strong>。</p>
+    <p>`v` 是"我想存什么"，`u` 是"为此我实际改了多少"。后者才是能被展开的那个量。</p>
+  </div>
+
+  <p>这也解释了 <a href="../reference/glossary.html">术语表</a>里 buffer 内容的差别：Mamba-2 存 <code>(v, k)</code>，GDN 存 <code>(u, k, a)</code>。</p>
+</section>
+
+<section id="cost">
+  <h2>代价核算：不是带宽</h2>
+
+  <p>修好之后有个新麻烦：<strong>要算 <code>u</code>，你得先有 <code>S k</code></strong> —— 也就是在 <code>k</code> 上做一次读出。于是 GDN 的每一步需要<strong>两次</strong>读出：</p>
+
+  <div class="routes">
+    <div class="route is-new">
+      <h4>在 q 上读出</h4>
+      <div class="route-body"><p>得到 <code>y</code> —— 这一层的输出，送给下一层。</p></div>
+    </div>
+    <div class="route is-new">
+      <h4>在 k 上读出</h4>
+      <div class="route-body"><p>得到预测，进而得到 <code>u</code> —— 喂给<strong>自己的</strong>状态更新。</p></div>
+    </div>
+  </div>
+
+  <p>这就是<strong>state-and-output route</strong> 这个名字的意思：这套公式必须同时产出「输出」和「状态更新的原料」，而 Mamba-2 只需要前者。</p>
+
+  <p>那 <code>S k</code> 这次读出，会不会逼我们把 state 物化出来？<strong>不会</strong> —— 它和 <code>S q</code> 是一模一样的形式，第 1 课那套 output-only 展开照样能算，只是把读出向量从 <code>q</code> 换成 <code>k</code>。我逐步验证过，偏差 <code>3e-15</code>。</p>
+
+  <table class="ledger">
+    <caption>每 head 每 step · fp32 · d = n = 128 · h = 32</caption>
+    <thead>
+      <tr><th>项</th><th>Mamba-2</th><th>GDN</th></tr>
+    </thead>
+    <tbody>
+      <tr><th>读检查点</th><td>64 KiB</td><td>64 KiB <span class="note">读一次，两个 mat-vec 复用</span></td></tr>
+      <tr><th>写 state</th><td class="win">0</td><td class="win">0</td></tr>
+      <tr><th>buffer 每 token 存</th><td><code>k, v</code> → d+n</td><td><code>u, k, a</code> → d+n+1</td></tr>
+      <tr><th>搬运合计</th><td>96 KiB</td><td class="win">≈ 96 KiB</td></tr>
+      <tr><th>对检查点的 mat-vec</th><td>1 次</td><td class="cost">2 次</td></tr>
+      <tr><th>窗口内的内积</th><td>h 次</td><td class="cost">2h 次</td></tr>
+      <tr><th>算术强度</th><td>≈ 0.5 FLOP/byte</td><td class="cost">≈ 1.0 FLOP/byte</td></tr>
+    </tbody>
+  </table>
+
+  <p><strong>搬运量几乎没变，算术翻了一倍。</strong>而 decode 是重度 memory-bound —— <code>1.0 FLOP/byte</code> 离 GPU 的算力带宽比（几十到几百）还差一到两个数量级。<strong>翻倍的算术几乎是免费的，带宽收益基本完整保留。</strong></p>
+
+  <div class="callout">
+    <span class="label">更正第 1 课的一句话</span>
+    <p>我在第 1 课末尾写 GDN「拿不到这一课的完整收益」。那句话措辞不准，已改。带宽收益是<strong>保留</strong>的；GDN 付出的代价在别处 —— 见下一节。</p>
+  </div>
+</section>
+
+<section id="realcost">
+  <h2>真正的代价：窗口内的 <code>u</code> 是串行纠缠的</h2>
+
+  <p>再看一眼定义：<code>u</code> 依赖 <code>S</code>，而 <code>S</code> 依赖之前所有的 <code>u</code>。窗口里的 h 个 <code>u</code> 因此串成了一条<strong>依赖链</strong>：</p>
+
+  <div class="equation">
+    u₁ → S₁ → u₂ → S₂ → u₃ → ⋯ → u<sub>h</sub>
+    <span class="eq-note">每个 <code>u</code> 都要等前一个算完。这条链是 GDN 独有的，Mamba-2 的 <code>v</code> 之间毫无关系。</span>
+  </div>
+
+  <p>普通 decode 时这不要紧：每步只算<strong>一个</strong>新的 <code>u</code>，append 进 buffer，从此<strong>冻结</strong> —— 它只依赖更早的状态，以后永远不用重算。</p>
+
+  <p class="lede">而"冻结"这个性质，正是<strong>为什么必须缓存 <code>u</code> 而不是 <code>v</code></strong>：</p>
+
+  <ul class="answers">
+    <li><strong>缓存 u</strong>窗口里全是算好的死值。求和项之间没有依赖，可以一次并行加完。</li>
+    <li><strong>缓存 v</strong>每一步都得把整条链<strong>重放一遍</strong>才能还原出 u —— h 个串行相关的步骤，每步还各带一次读出。ReplaySSM 想省的东西全都回来了。</li>
+    <li><strong>结论</strong>缓存输入这个想法，对 GDN 来说只有在「输入」指 <code>u</code> 时才成立。<code>v</code> 不是可缓存的量。</li>
+  </ul>
+
+  <p>但投机解码要<strong>同时</strong>验证 T 个 draft token —— 而这 T 个 <code>u</code> 彼此依赖，没法各算各的。这条链就是第 3 课要处理的东西：把它写成一个 <code>T×T</code> 的严格下三角系统，用<strong>一次三角求解</strong>替掉 T 步串行循环。你在 prefill 里做 UT transform 时已经解过同一类方程 —— 只不过那时的"chunk"是序列分块，这次是投机窗口。</p>
+</section>
+
+<section id="quiz">
+  <h2>检查</h2>
+  <form class="quiz-form quiz">
+
+    <fieldset class="quiz-question" data-answer="b" data-explanation="障碍是 state 被右乘了一个会混合通道的 n×n 矩阵。秩、每步项数、衰减是标量还是对角，都不构成障碍 —— 判定练习第 2、3 条已经验证过。">
+      <legend>1. 一条 state 更新式无法展开成「检查点 + 加权和」，根本障碍是什么？</legend>
+      <label class="option"><input type="radio" name="q1" value="a">每步塞进的外积数量多于一个</label>
+      <label class="option"><input type="radio" name="q1" value="b">状态被右乘会混合通道的矩阵</label>
+      <label class="option"><input type="radio" name="q1" value="c">衰减系数是对角而不是标量的</label>
+      <label class="option"><input type="radio" name="q1" value="d">状态维度远大于输出向量长度</label>
+    </fieldset>
+
+    <fieldset class="quiz-question" data-answer="d" data-explanation="u = β(v − a·Sk)：学习率 × (目标 − 预测)。这就是 delta rule 的修正项，和 WY 表示里的修正向量同源。">
+      <legend>2. <code>u</code> 在语义上是什么？</legend>
+      <label class="option"><input type="radio" name="q2" value="a">当前这一步真正想写入的目标值</label>
+      <label class="option"><input type="radio" name="q2" value="b">当前这一步读出来的旧有预测值</label>
+      <label class="option"><input type="radio" name="q2" value="c">检查点状态在该方向上的投影值</label>
+      <label class="option"><input type="radio" name="q2" value="d">学习率乘以预测误差后的修正量</label>
+    </fieldset>
+
+    <fieldset class="quiz-question" data-answer="c" data-explanation="两个外积 S k k⊤ 和 v k⊤ 共用同一个 k⊤，所以能塌成一个外积。这是 delta rule 的特性 —— 它擦除的方向和写入的方向是同一个。">
+      <legend>3. 三行代数里，两个外积为什么能合并成一个？</legend>
+      <label class="option"><input type="radio" name="q3" value="a">因为它们的衰减系数恰好相等</label>
+      <label class="option"><input type="radio" name="q3" value="b">因为投影矩阵是对称且幂等的</label>
+      <label class="option"><input type="radio" name="q3" value="c">因为它们共用右边那个转置项</label>
+      <label class="option"><input type="radio" name="q3" value="d">因为学习率被提到了括号外面</label>
+    </fieldset>
+
+    <fieldset class="quiz-question" data-answer="a" data-explanation="搬运量几乎不变（仍然只读检查点、从不写回），算术约翻倍。但 1.0 FLOP/byte 离 GPU 拐点还差一到两个数量级，仍是 memory-bound，所以带宽收益基本保留。">
+      <legend>4. 相比 Mamba-2，GDN 多付的代价主要体现在哪？</legend>
+      <label class="option"><input type="radio" name="q4" value="a">算术量翻倍而搬运量几乎不变</label>
+      <label class="option"><input type="radio" name="q4" value="b">搬运量翻倍而算术量几乎不变</label>
+      <label class="option"><input type="radio" name="q4" value="c">必须把状态矩阵重新物化出来</label>
+      <label class="option"><input type="radio" name="q4" value="d">必须每一步都把状态写回显存</label>
+    </fieldset>
+
+    <fieldset class="quiz-question" data-answer="b" data-explanation="u 一旦算出就冻结，窗口里全是死值，求和可以并行。若缓存 v，每步都要重放整条依赖链才能还原 u —— 串行开销全部回来。">
+      <legend>5. 为什么缓存 <code>u</code> 而不是缓存 <code>v</code>？</legend>
+      <label class="option"><input type="radio" name="q5" value="a">因为它比目标值占用更少的显存</label>
+      <label class="option"><input type="radio" name="q5" value="b">因为它算完即冻结无需重放链条</label>
+      <label class="option"><input type="radio" name="q5" value="c">因为它的数值范围更利于低精度</label>
+      <label class="option"><input type="radio" name="q5" value="d">因为它可以与键向量共享存储位</label>
+    </fieldset>
+
+    <button type="submit">检查答案</button>
+    <p class="feedback"></p>
+  </form>
+</section>
+
+<section id="retrieval">
+  <h2>检索练习（合上讲义）</h2>
+  <div class="retrieval">
+    <p><strong>第一题 · 自己推一遍。</strong>只给你 GDN 原式，把 <code>u</code> 推出来。三行以内。</p>
+    <div class="equation">S ← a · S · (I − β k k<sup>⊤</sup>) + β (v k<sup>⊤</sup>)</div>
+
+    <p><strong>第二题 · 两个极限。</strong><code>β = 1</code> 时 <code>u</code> 变成什么，语义上意味着什么？<code>β → 0</code> 时呢？</p>
+
+    <p><strong>第三题 · 找 bug。</strong>有人把 <code>u</code> 实现成 <code>β(v − S k)</code>，漏了括号里的 <code>a</code>。这个 bug 为什么特别难抓？</p>
+
+    <button data-reveal-target="answer-1">显示参考答案</button>
+    <div class="reveal" id="answer-1">
+      <p><strong>1.</strong> 乘开 → 合并共用 <code>k⊤</code> 的两个外积 → 提 <code>β</code>：</p>
+      <div class="equation">a·S − aβ(S k)k<sup>⊤</sup> + βv k<sup>⊤</sup> = a·S + β(v − a·(S k)) k<sup>⊤</sup></div>
+      <p>于是 <code>u = β(v − a·(S k))</code>。检验方法：右边必须只剩「标量 × S」加「一个外积」。</p>
+
+      <p><strong>2.</strong> <code>β = 1</code> ⟹ <code>u = v − a·(S k)</code>：误差被<strong>全额</strong>修正，等于把 key 方向上的旧内容彻底覆盖成 <code>v</code>（硬写）。<code>β → 0</code> ⟹ <code>u → 0</code>，state 只衰减、不写入 —— 这一步的输入被完全忽略。所以 <code>β</code> 就是「覆盖强度」旋钮，这正是 gated <em>delta</em> net 里 delta 的含义。</p>
+
+      <p><strong>3.</strong> 因为它<strong>只错一点</strong>。<code>a</code> 通常接近 1（0.9 以上），所以漏掉它造成的偏差不大 —— 我实测相对误差 <strong>31.8%</strong>，而不是 105%。输出量级正常、不出 NaN、短序列上看着像是"精度问题"，能一路活到 benchmark 才因为长序列上的质量下降暴露。<strong>教训：写 kernel 之前先用 fp64 recurrent baseline 逐步对齐，把容差压到 1e-13，而不是 1e-2。</strong></p>
+      <p class="small">这三条的数值证据都在 <code>code/verify_replayssm_identities.py</code> 里，可以直接跑。</p>
+    </div>
+  </div>
+</section>
+
+<section id="source">
+  <h2>去读一手材料</h2>
+  <div class="callout">
+    <span class="label">Primary source</span>
+    <p><a href="https://tridao.me/blog/2026/replayssm/"><strong>ReplaySSM: Cache SSM Inputs, Not State — Tri Dao</strong></a></p>
+    <p>本课对应 <strong>§5 Algorithm</strong> 里 GDN 那一段。读的时候重点找两件事：博客怎么称呼 <code>u</code>，以及它把 GDN 归到 state-and-output route 的理由和本课的推导是否一致。</p>
+    <p class="small">配套：<a href="../../linear_attn/lessons/0003-delta-rule-to-wy.html">linear_attn 第 3 课（delta rule → WY）</a>是 <code>u</code> 的来处 · <a href="../reference/replayssm-equations.html">公式卡</a> · <a href="https://github.com/sgl-project/sglang/issues/28511">SGLang RFC #28511</a>（Phase 1 只做 GDN，正是因为这条 <code>u</code> 的路已经通了）</p>
+  </div>
+  <div class="aside">
+    <p><strong>一处尚未核实：</strong>博客未明确 GDN 衰减门是标量还是对角。本课按标量推导。好消息是判定练习第 2 条已经证明<strong>对角也不改变结论</strong> —— 衰减能吸收进 <code>k</code>，形状依旧可展开。等能访问原文时会回查并更新<a href="../reference/replayssm-equations.html">公式卡</a>。</p>
+  </div>
+</section>
+
+<section id="next">
+  <h2>下一课：一次三角求解替掉串行循环</h2>
+  <p>这一课留下的那条依赖链 <code>u₁ → u₂ → ⋯</code>，在普通 decode 里无害，在投机解码里是拦路虎：T 个 draft 的 <code>u</code> 互相依赖，不能并行算。</p>
+  <p>第 3 课把这条链写成 <code>u_s = R_s − Σ_{s′&lt;s} A_{s,s′} u_{s′}</code> —— 其中 <code>R</code> 只依赖 draft 和窗口末端的状态，<code>A</code> 严格下三角。于是 T 个修正量由<strong>一次 <code>T×T</code> 三角求解</strong>同时得到。顺带把这一课欠下的 <code>w</code> 的具体形式（那串衰减前缀和）一并补上 —— 两者都是"窗口内的三角结构"。</p>
+</section>
+
+</main>
+
+<footer class="lesson-footer">
+  <p><strong>有任何不清楚的地方，直接问我。</strong>三行代数哪一步跳了、为什么两个外积能合并、想看某个数字怎么跑出来的，都可以追问。</p>
+  <p>上一课：<a href="./0001-decode-byte-ledger.html">一个矩阵，从来不需要存在</a> · Mission：<a href="../MISSION.md">MISSION.md</a> · 术语：<a href="../reference/glossary.html">glossary</a> · 公式卡：<a href="../reference/replayssm-equations.html">replayssm-equations</a> · 验证脚本：<code>code/verify_replayssm_identities.py</code></p>
+  <p class="small">第 2 课 / 5 · 下一课：投机验证的 T×T 三角求解</p>
+</footer>
+
+</div>
+<script src="../assets/quiz.js"></script>
+<script src="../assets/code-highlight.js"></script>
+<script src="../assets/shape-drill.js"></script>
+</body>
+</html>
