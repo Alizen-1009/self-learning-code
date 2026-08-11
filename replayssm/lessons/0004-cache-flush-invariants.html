@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 4 课 · 三个不变量：错了不会崩，只会静默算错</title>
+<link rel="stylesheet" href="../assets/course.css">
+<link rel="stylesheet" href="../assets/ledger.css">
+</head>
+<body>
+<div class="course-shell">
+
+<header class="lesson-header">
+  <p class="eyebrow">ReplaySSM · 第 4 课</p>
+  <h1>三个不变量</h1>
+  <p class="deck">前三课的风险是「推错公式」—— 一跑就露馅。这一课的风险完全不同：簿记错了程序不崩、不报错、不出 NaN，只是<strong>安静地算错</strong>。而且错得越轻，越危险。</p>
+  <div class="lesson-meta">
+    <span class="pill">算法层 · 不写 kernel</span>
+    <span class="pill">约 15 分钟</span>
+    <span class="pill">符号预算 10 个（新增 1 个）</span>
+  </div>
+</header>
+
+<nav class="lesson-nav">
+  <a href="#objective">收获</a>
+  <a href="#silent">静默算错</a>
+  <a href="#fsm">状态机</a>
+  <a href="#invariants">三个不变量</a>
+  <a href="#rollback">回滚为何精确</a>
+  <a href="#squeeze">L 的两侧</a>
+  <a href="#quiz">检查</a>
+  <a href="#retrieval">检索</a>
+</nav>
+
+<main>
+
+<section id="objective">
+  <div class="objective">
+    <span class="label">本课唯一收获</span>
+    <p>能<strong>凭记忆画出</strong> cache / flush 状态机，说出三个正确性不变量各自「破了会怎样」，并从两侧夹出 <code>L</code> 的取值区间。</p>
+  </div>
+  <div class="aside">
+    <p><strong>新增符号只有 <code>m</code></strong>（一轮投机中被接受的 draft 数，<code>0 ≤ m ≤ T</code>）。其余全是老面孔：<code>d n S₀ u k h L T w</code>。这一课几乎没有新数学 —— <strong>难点从「推导」换成了「不漏掉一个条件」</strong>。</p>
+  </div>
+</section>
+
+<section id="silent">
+  <h2>先看后果：违反判据会发生什么</h2>
+
+  <p>我写了一个 60 步的 GDN 序列，用两种方式跑：一种老实遵守 flush 判据，一种<strong>故意漏掉判据</strong>（让环形 buffer 自然回绕、覆盖旧数据）。两者都和纯递推基线对比：</p>
+
+  <table class="ledger">
+    <caption>相对误差 · 遵守判据 vs 漏掉判据（fp64，d=6, n=5, 60 步）</caption>
+    <thead><tr><th>L</th><th>遵守判据</th><th>漏掉判据</th><th>有没有报错？</th></tr></thead>
+    <tbody>
+      <tr><th>4</th><td class="win">1.6e-15</td><td class="cost">281.8%</td><td>没有</td></tr>
+      <tr><th>8</th><td class="win">1.6e-15</td><td class="cost">101.0%</td><td>没有</td></tr>
+      <tr><th>16</th><td class="win">1.6e-15</td><td class="cost">36.9%</td><td>没有</td></tr>
+      <tr><th>32</th><td class="win">1.6e-15</td><td class="cost">0.6%</td><td>没有</td></tr>
+    </tbody>
+  </table>
+
+  <div class="tldr">
+    <p><code>L</code> 越大，错得<strong>越轻</strong> —— 所以<strong>越危险</strong>。</p>
+    <p>L=4 时 282% 的误差你一眼就看见了。L=32 时只有 0.6% —— 输出量级正常、没有 NaN、短序列上看着像「精度问题」，能一路活到 benchmark，最后表现为长上下文质量莫名下降。</p>
+  </div>
+
+  <p>这就是为什么下面三条要叫<strong>不变量</strong>而不是「参数」：它们不是性能旋钮，是正确性条件。判错的代价不是慢，是<strong>错</strong>。</p>
+
+  <p class="citation">这张表可以自己复现：<code>python3 code/verify_replayssm_identities.py</code> 第 5 节。脚本把「违反判据必须算错」写成了一条<strong>必须失败</strong>的断言 —— 如果哪天它「通过」了，说明模拟本身写错了。</p>
+</section>
+
+<section id="fsm">
+  <h2>状态机</h2>
+
+  <p>一轮投机解码的完整簿记流程。<strong>合上讲义后你应该能重画这张图</strong> —— 这是本课的主要考点。</p>
+
+  <div class="fsm">
+    <div class="fsm-step">
+      <strong>稳态</strong>
+      <span>buffer 里有 <code>h</code> 个已提交 token 的 <code>(u, k, a)</code>；检查点 <code>S₀</code> 在 HBM 里<strong>只读</strong>。此时的状态 = <code>S₀</code> 加上 buffer 里那 <code>h</code> 项的加权和（第 1 课的展开）。</span>
+    </div>
+
+    <p class="fsm-arrow">↓ 新一轮开始前，先问一个问题</p>
+
+    <div class="fsm-step is-guard">
+      <strong><code>h + 2T &gt; L</code> ？</strong>
+      <span>这一步是<strong>整套簿记唯一的正确性闸门</strong>。注意它问的是「装不装得下」，而不是「快不快」。</span>
+    </div>
+
+    <div class="fsm-branch">
+      <div class="is-yes">
+        <b>是 → 先 flush</b>
+        装不下了，必须先腾空间。
+      </div>
+      <div class="is-no">
+        <b>否 → 直接进第 4 步</b>
+        余量够，本轮不写 state。
+      </div>
+    </div>
+
+    <div class="fsm-step is-flush">
+      <strong>FLUSH（唯一会写 state 的时刻）</strong>
+      <span>把 buffer 里 <code>h</code> 项按 <code>w</code> 权重<strong>汇总进 <code>S₀</code></strong> → 写回 HBM → <code>h = 0</code>、<code>write_pos = 0</code>。成本 <code>4dn</code> 字节，摊薄到整个周期上。</span>
+    </div>
+
+    <div class="fsm-step">
+      <strong>APPEND：写入 T 个 draft</strong>
+      <span>把 T 个 draft 的 <code>(u, k, a)</code> 写进 buffer。<strong><code>write_pos</code> 在这里前进，且整个 forward 只前进这一次。</strong></span>
+    </div>
+
+    <div class="fsm-step">
+      <strong>VERIFY：一次算完，不串行</strong>
+      <span>三角求解出 T 个 <code>u</code>，masked GEMM 出 T 个 <code>y</code>（<a href="./0003-triangular-solve-speculative.html">第 3 课</a>）。全程不物化 state。</span>
+    </div>
+
+    <div class="fsm-step">
+      <strong>COMMIT / ROLLBACK：接受 m 个</strong>
+      <span>把 <code>write_pos</code> 退到 <code>h + m</code>，然后 <code>h ← h + m</code>。被拒的 <code>T − m</code> 项就留在那里等着被覆盖 —— <strong>不需要任何撤销动作</strong>。</span>
+    </div>
+
+    <p class="fsm-loop">↺ 回到稳态。整个循环里 <code>S₀</code> 只被读，除了 FLUSH 那一步。</p>
+  </div>
+
+  <div class="callout">
+    <span class="label">为什么是 <code>2T</code> 而不是 <code>T</code>？</span>
+    <p>装下本轮的 T 个 draft，只需要 <code>h + T ≤ L</code>。多留一轮余量的理由是<strong>下一条不变量</strong>：<code>write_pos</code> 每个 forward 只能前进一次，所以你<strong>不能在一轮中间临时插入一次 flush</strong>。判据必须提前一轮保证安全 —— 最坏情况是本轮全部接受（<code>m = T</code>），于是 <code>h</code> 变成 <code>h + T</code>，下一轮还得装得下另外 T 个。</p>
+    <p class="small">⚠️ <code>h + 2T &gt; L</code> 这个判据本身取自<a href="https://tridao.me/blog/2026/replayssm/">博客</a>（并见<a href="../reference/replayssm-equations.html">公式卡</a>）；上面这段「为什么是 2T」是<strong>我的重建</strong>，博客没有展开。它自洽且能解释为什么 <code>2T</code> 与 CUDA graph 约束绑在一起，但请当作推断而非原文。</p>
+  </div>
+</section>
+
+<section id="invariants">
+  <h2>三个不变量</h2>
+
+  <ul class="invariants">
+    <li>
+      <strong><code>h + 2T ≤ L</code></strong>
+      <p>环形 buffer 永远不能覆盖<strong>仍然需要的</strong>输入。窗口之前的历史都在 <code>S₀</code> 里，窗口之内的必须字字完好 —— 因为它们是重建状态的唯一来源。</p>
+      <p class="breaks"><b>破了会怎样：</b>回绕覆盖掉还要用的 <code>(u, k)</code> → 重建出的状态少了几项 → <b>静默算错</b>。上面那张表就是它，误差从 282% 到 0.6% 都有。</p>
+    </li>
+    <li>
+      <strong><code>write_pos</code> 每 forward 只前进一次</strong>
+      <p>这条不是数学要求，是 <strong>CUDA graph</strong> 要求。CUDA graph 把一次 forward 的 kernel 序列录下来重放，指针的推进次数必须是录制时固定的 —— 不能依赖运行时才知道的 <code>m</code>。所以推进一次、事后回退，而不是「按需推进 m 次」。</p>
+      <p class="breaks"><b>破了会怎样：</b>graph 重放时指针走的步数和录制时不一致 → buffer 布局错位 → 同样是<b>静默算错</b>，而且只在开了 CUDA graph 时出现，关掉就好了 —— 极难定位。</p>
+      <p class="small">来源：<a href="https://github.com/sgl-project/sglang/issues/28511">SGLang RFC #28511</a> 明确记录了这条约束。</p>
+    </li>
+    <li>
+      <strong>flush 边界对齐 radix cache 的 snapshot 边界</strong>
+      <p>推理框架会把 prefix 的状态做快照复用（radix cache）。快照必须能完整描述「到某个 token 为止」的状态。而 ReplaySSM 的状态是 <code>S₀ + buffer</code> <strong>两部分</strong> —— 如果快照点落在 buffer 中间，你存下的 <code>S₀</code> 并不代表那个 token 的状态。</p>
+      <p class="breaks"><b>破了会怎样：</b>另一条请求复用了这个快照，从一个错误的 <code>S₀</code> 出发 → <b>静默算错，而且跨请求污染</b>。三条里最难查的一条。</p>
+      <p class="small">这就是 RFC 要改 <code>attention/mamba/mamba2_metadata.py</code> 的原因。</p>
+    </li>
+  </ul>
+
+  <div class="aside">
+    <p>注意三条的共同点：<strong>破了都是静默算错，没有一条会抛异常。</strong>这决定了开发方式 —— 不能靠「跑起来没崩」判断正确，必须拿 fp64 递推基线逐步对齐，容差压到 <code>1e-13</code> 而不是 <code>1e-2</code>。这条教训第 2 课那个漏掉 <code>a</code> 的 bug（31.8% 误差）已经预演过一次了。</p>
+  </div>
+</section>
+
+<section id="rollback">
+  <h2>回滚为什么是<em>精确</em>的</h2>
+
+  <p>第 1 课说过「回滚只需退指针」。现在可以把它说得更强。我验证了「接受 m 个 draft 后退指针」与「一开始就只跑那 m 个」的差别：</p>
+
+  <div class="equation is-hero">
+    偏差 = 0.00e+00 &nbsp;&nbsp;（m = 0, 1, 2, … 6 全部）
+    <span class="eq-note">不是 <code>1e-15</code>，是<strong>精确的零</strong>。</span>
+  </div>
+
+  <p>为什么能精确到零？因为<strong>被拒的 draft 从未参与任何计算</strong>。它们的 <code>u</code> 被算出来了，写进了 buffer 的槽位，但 <code>h</code> 没有把它们计入 —— 于是重建状态时的求和根本不遍历它们。它们不是「被减掉了」，而是<strong>压根没被加进去</strong>。</p>
+
+  <div class="callout">
+    <span class="label">对照：为什么快照方案做不到</span>
+    <p>既有做法（<a href="https://proceedings.mlr.press/v262/wu24a.html">Snakes and Ladders</a>）给每个 draft 存一份完整 <code>d×n</code> state，回滚 = 恢复快照。它也能得到正确结果，但代价是每个 draft 一份 <code>4dn</code> 的搬运与显存。</p>
+    <p><strong>ReplaySSM 的回滚之所以免费，是因为它把「有损摘要」换成了「原始输入」。</strong>摘要一旦吸收就无法反悔，原始输入可以选择不读。这是第 1 课那句「存输入而不是存摘要」在簿记层的兑现。</p>
+  </div>
+</section>
+
+<section id="squeeze">
+  <h2><code>L</code> 被两侧夹住</h2>
+
+  <p>第 1 课你用算盘摸到过一个临界点：窗口太长时，读 buffer 的字节会吃掉省下的写回。现在把它算完整 —— 加上 flush 的摊薄写回，<code>L</code> 的账有三项：</p>
+
+  <div class="equation">
+    每步搬运 = 4dn &nbsp;(读检查点) &nbsp;+&nbsp; 4·h̄·(d+n) &nbsp;(读 buffer) &nbsp;+&nbsp; 4dn / 周期 &nbsp;(flush 摊薄)
+    <span class="eq-note"><code>h̄</code> 是一个 flush 周期内 <code>h</code> 的平均值。<code>L</code> 变大 ⟹ 第二项涨、第三项跌。所以存在最优值。</span>
+  </div>
+
+  <p>令导数为零（对 <code>h̄ ≈ L/2</code> 的稳态）：</p>
+
+  <div class="equation is-hero">
+    L* = √( 2dn / (d+n) ) &nbsp;≈&nbsp; 11&nbsp;&nbsp;（d = n = 128）
+    <span class="eq-note">数值扫描给出 <strong>L = 12</strong>，与解析式吻合。极小很<strong>平坦</strong> —— L 在 8–16 之间收益都是 1.70× 左右。</span>
+  </div>
+
+  <p>而下界完全来自投机窗口：<code>L ≤ 2T</code> 时 <code>h</code> 还是 0 就触发 flush，buffer 一次都用不上；要让 buffer 真正非空，需要 <code>L ≥ 3T</code>。两侧一撞：</p>
+
+  <table class="ledger">
+    <caption>投机窗口如何通过 <code>L</code> 吃掉带宽收益（d = n = 128）</caption>
+    <thead><tr><th>T</th><th>L 的下界（3T）</th><th>取该 L 时的收益</th><th></th></tr></thead>
+    <tbody>
+      <tr><th>1（不投机）</th><td>3</td><td class="win">1.71×（可取 L≈12）</td><td class="note">下界不起作用</td></tr>
+      <tr><th>4</th><td>12</td><td class="win">1.71×</td><td class="note">刚好撞上最优值</td></tr>
+      <tr><th>8</th><td>24</td><td>1.65×</td><td class="cost">下界已超过最优值</td></tr>
+      <tr><th>16</th><td>48</td><td class="cost">1.45×</td><td class="cost">明显让利</td></tr>
+    </tbody>
+  </table>
+
+  <div class="tldr">
+    <p>投机窗口不是免费的 —— 它<strong>两次</strong>收费。</p>
+    <p>第一次在<a href="./0003-triangular-solve-speculative.html">第 3 课</a>：`T²` 的额外内积，每 token 开销 `1 + T/(2h)`。第二次在这里：`T` 抬高 `L` 的下界，逼你离开带宽最优点。两笔账互相独立，都要算。</p>
+  </div>
+
+  <div class="calc" data-flush-calc>
+    <div class="calc-controls">
+      <div class="calc-slider">
+        <label>d · value 维 <output data-flush-echo="d">128</output></label>
+        <input type="range" data-flush-var="d" min="32" max="512" step="32" value="128">
+      </div>
+      <div class="calc-slider">
+        <label>n · key 维 <output data-flush-echo="n">128</output></label>
+        <input type="range" data-flush-var="n" min="32" max="512" step="32" value="128">
+      </div>
+      <div class="calc-slider">
+        <label>L · buffer 容量 <output data-flush-echo="L">12</output></label>
+        <input type="range" data-flush-var="L" min="3" max="160" step="1" value="12">
+      </div>
+      <div class="calc-slider">
+        <label>T · 投机窗口 <output data-flush-echo="T">1</output></label>
+        <input type="range" data-flush-var="T" min="1" max="24" step="1" value="1">
+      </div>
+    </div>
+    <div class="calc-out">
+      <p class="calc-verdict ok" data-flush-verdict></p>
+
+      <div class="budget-row">
+        <span>读检查点</span>
+        <span class="bar" data-flush-bar="read-state"><i></i></span>
+        <span class="budget-num" data-flush-out="read-state">64 KiB</span>
+      </div>
+      <div class="budget-row">
+        <span>读 buffer</span>
+        <span class="bar is-buffer" data-flush-bar="read-buf"><i></i></span>
+        <span class="budget-num" data-flush-out="read-buf">5.0 KiB</span>
+      </div>
+      <div class="budget-row">
+        <span>flush 摊薄写回</span>
+        <span class="bar is-write" data-flush-bar="flush-write"><i></i></span>
+        <span class="budget-num" data-flush-out="flush-write">5.8 KiB</span>
+      </div>
+
+      <table class="ledger">
+        <caption>每 decode step 的平均搬运（非投机稳态，fp32）</caption>
+        <tbody>
+          <tr><th>合计</th><td data-flush-out="per-step">75 KiB</td></tr>
+          <tr><th>基线 <span class="note">summary route，8dn</span></th><td data-flush-out="baseline">128 KiB</td></tr>
+          <tr><th>收益</th><td class="win" data-flush-out="ratio">1.71×</td></tr>
+          <tr><th>周期内平均 h / 峰值 h</th><td><span data-flush-out="hbar">5.0</span> / <span data-flush-out="hmax">10</span></td></tr>
+          <tr><th>flush 周期长度</th><td><span data-flush-out="cycle">11</span> 步</td></tr>
+          <tr><th>L 的下界 <span class="note">2T 不可用 / 3T 才有用</span></th><td><span data-flush-out="l-floor">2</span> / <span data-flush-out="l-useful">3</span></td></tr>
+          <tr><th>带宽最优 L* / 归零处</th><td><span data-flush-out="l-star">11</span> / <span data-flush-out="l-hard">128</span></td></tr>
+        </tbody>
+      </table>
+      <p class="calc-foot"><strong>搬运账按非投机稳态算（每 forward 一个 token），T 只驱动下界、不进搬运账。</strong>否则投机把一次 forward 摊给 T 个 token 的收益（那是第 3 课的事）会把 L 的取舍完全埋掉。把 T 拉到 8 以上，看下界怎么越过最优值。</p>
+    </div>
+  </div>
+
+  <div class="aside">
+    <p><strong>与第 1 课的关系。</strong>第 1 课算的是<em>瞬时</em> <code>h</code> 的临界点 <code>dn/(d+n) = 64</code>；这里算的是<em>周期平均</em>。因为 <code>h</code> 在 0 和峰值之间来回，<code>h̄ ≈ L/2</code> —— 所以对应到 <code>L</code> 的归零处是 <code>2dn/(d+n) = 128</code>。把算盘的 L 拉到 128，收益正好显示 <strong>1.00×</strong>，与第 1 课把 h 拉到 64 时看到的临界点是同一件事。</p>
+    <p><strong>一个附带好处（未实测）。</strong>flush 把衰减前缀和的跨度夹在 ≤ <code>L</code> 个 token 内。前缀和有 cancellation 与下溢风险，跨度越短越安全 —— 所以 flush 除了省显存，可能顺带改善数值稳定性。<strong>这是推理，不是实测</strong>，需要用 recurrent baseline 在长序列上验证，留给 kernel 分支。</p>
+  </div>
+</section>
+
+<section id="quiz">
+  <h2>检查</h2>
+  <form class="quiz-form quiz">
+
+    <fieldset class="quiz-question" data-answer="c" data-explanation="三条不变量破了都不抛异常。而且 L 越大误差越小（L=32 时只有 0.6%），越像「精度问题」，越容易活到 benchmark。这是本课的核心警告。">
+      <legend>1. 违反 <code>h + 2T ≤ L</code> 之后会发生什么？</legend>
+      <label class="option"><input type="radio" name="q1" value="a">越界访问导致进程直接崩溃</label>
+      <label class="option"><input type="radio" name="q1" value="b">输出出现无穷或者非数值项</label>
+      <label class="option"><input type="radio" name="q1" value="c">无任何报错但结果安静地错</label>
+      <label class="option"><input type="radio" name="q1" value="d">吞吐下降但数值结果仍正确</label>
+    </fieldset>
+
+    <fieldset class="quiz-question" data-answer="b" data-explanation="CUDA graph 录制的 kernel 序列必须可重放，指针推进次数不能依赖运行时才知道的接受数 m。所以推进一次、事后回退。">
+      <legend>2. <code>write_pos</code> 每 forward 只前进一次，是为了满足什么？</legend>
+      <label class="option"><input type="radio" name="q2" value="a">环形缓冲的容量上界约束条件</label>
+      <label class="option"><input type="radio" name="q2" value="b">计算图录制重放的固定性要求</label>
+      <label class="option"><input type="radio" name="q2" value="c">前缀和在对数空间的精度要求</label>
+      <label class="option"><input type="radio" name="q2" value="d">三角求解对下三角结构的要求</label>
+    </fieldset>
+
+    <fieldset class="quiz-question" data-answer="d" data-explanation="ReplaySSM 的状态是「S₀ + buffer」两部分。若快照点落在 buffer 中间，存下的 S₀ 不代表那个 token 的状态，别的请求复用它就会跨请求污染。">
+      <legend>3. flush 边界为什么必须对齐 radix cache 的快照边界？</legend>
+      <label class="option"><input type="radio" name="q3" value="a">因为快照的写入必须与刷新同时发生</label>
+      <label class="option"><input type="radio" name="q3" value="b">因为快照只能保存定长的缓冲区内容</label>
+      <label class="option"><input type="radio" name="q3" value="c">因为快照恢复时需要重放全部的输入</label>
+      <label class="option"><input type="radio" name="q3" value="d">因为状态分两部分快照点须落在边界</label>
+    </fieldset>
+
+    <fieldset class="quiz-question" data-answer="a" data-explanation="被拒的 draft 的 u 虽然算出来并写进了槽位，但 h 没把它们计入，重建时的求和根本不遍历它们 —— 不是被减掉，是压根没被加进去。所以偏差是精确的 0。">
+      <legend>4. 为什么回滚的偏差是精确的零，而不是 <code>1e-15</code>？</legend>
+      <label class="option"><input type="radio" name="q4" value="a">被拒项从未被计入重建的求和</label>
+      <label class="option"><input type="radio" name="q4" value="b">被拒项的贡献被精确地减掉了</label>
+      <label class="option"><input type="radio" name="q4" value="c">被拒项的槽位在回滚时被清零</label>
+      <label class="option"><input type="radio" name="q4" value="d">被拒项的衰减权重恰好等于零</label>
+    </fieldset>
+
+    <fieldset class="quiz-question" data-answer="c" data-explanation="下界来自投机窗口（L ≥ 3T buffer 才非空），上界来自读 buffer 的字节成本（最优 L* = sqrt(2dn/(d+n)) ≈ 11）。T ≥ 8 时下界越过最优值，收益开始让利。">
+      <legend>5. <code>L</code> 的取值被哪两件事夹住？</legend>
+      <label class="option"><input type="radio" name="q5" value="a">显存总量在下与模型层数在上</label>
+      <label class="option"><input type="radio" name="q5" value="b">状态维度在下与序列长度在上</label>
+      <label class="option"><input type="radio" name="q5" value="c">投机窗口在下与缓存读取在上</label>
+      <label class="option"><input type="radio" name="q5" value="d">刷新频率在下与快照边界在上</label>
+    </fieldset>
+
+    <button type="submit">检查答案</button>
+    <p class="feedback"></p>
+  </form>
+</section>
+
+<section id="retrieval">
+  <h2>检索练习（合上讲义）</h2>
+  <div class="retrieval">
+    <p><strong>第一题 · 画状态机。</strong>在纸上重画一轮投机解码的完整簿记流程。必须出现：判据、flush 做的三件事、<code>write_pos</code> 在哪里推进、接受 m 个之后指针停在哪。</p>
+
+    <p><strong>第二题 · 反推后果。</strong>对每条不变量，说出「破了会怎样」。哪一条最难定位？为什么？</p>
+
+    <p><strong>第三题 · 定 L。</strong><code>d = n = 256</code>、<code>T = 8</code>。求：(a) 带宽最优 <code>L*</code>；(b) 投机给出的下界；(c) 两者冲突吗？（先算，再用算盘核对。）</p>
+
+    <button data-reveal-target="answer-1">显示参考答案</button>
+    <div class="reveal" id="answer-1">
+      <p><strong>1.</strong> 稳态 → <strong>判据 <code>h + 2T &gt; L</code>？</strong> → 是则 FLUSH（汇总进 <code>S₀</code>、写回 HBM、<code>h=0</code> 且 <code>write_pos=0</code>）→ APPEND T 个 draft（<strong><code>write_pos</code> 在此推进，且只推进一次</strong>）→ VERIFY（三角求解出 u、masked GEMM 出 y）→ 接受 m 个，<strong><code>write_pos</code> 退到 <code>h + m</code></strong>，<code>h ← h + m</code> → 回到稳态。全程 <code>S₀</code> 只读，唯一例外是 FLUSH。</p>
+
+      <p><strong>2.</strong> ① 覆盖仍需的输入 → 静默算错；② CUDA graph 重放时指针步数错位 → 静默算错，且<strong>关掉 graph 就好了</strong>；③ 快照点落在 buffer 中间 → 静默算错且<strong>跨请求污染</strong>。</p>
+      <p><strong>最难定位的是第三条</strong>：前两条至少在单条请求内可复现，第三条要同时满足「某请求恰好在错误边界做了快照」+「另一请求恰好复用了它」，是并发相关的、不确定复现的污染。第二条次难，因为它有个极具误导性的特征 —— 关掉 CUDA graph 症状就消失，很容易被误判成「graph 的 bug」。</p>
+
+      <p><strong>3.</strong> (a) <code>L* = √(2·256·256/512) = √256 = 16</code>。(b) 下界 <code>3T = 24</code>（<code>2T = 16</code> 是完全不可用的硬底）。(c) <strong>冲突</strong>：24 &gt; 16，投机窗口把你推离带宽最优点。</p>
+      <p class="small">注意 <code>d = n = 256</code> 时 <code>L*</code> 从 11 涨到 16 —— 状态越大，能负担的窗口越长（因为省下的那次写回 <code>4dn</code> 也更大）。所以 <code>L</code> 不是一个常数，必须跟着 <code>d</code>、<code>n</code>、<code>T</code> 一起调。这正是 SGLang 把它做成命令行参数 <code>--gdn-replayssm-cache-len</code> 而不是硬编码的原因。</p>
+      <p class="small">本课全部断言的数值证据在 <code>code/verify_replayssm_identities.py</code> 第 5 节（4 条，含一条「必须失败」）。</p>
+    </div>
+  </div>
+</section>
+
+<section id="source">
+  <h2>去读一手材料</h2>
+  <div class="callout">
+    <span class="label">Primary source</span>
+    <p><a href="https://tridao.me/blog/2026/replayssm/"><strong>ReplaySSM: Cache SSM Inputs, Not State — Tri Dao</strong></a>（§5 Algorithm）</p>
+    <p>这一课<strong>更该读的是生产视角</strong>：<a href="https://github.com/sgl-project/sglang/issues/28511"><strong>SGLang RFC #28511</strong></a>。三条不变量里有两条（<code>write_pos</code>、snapshot 对齐）是它记录的，博客只谈算法。读的时候找：为什么改动落在 <code>mem_cache/memory_pool.py</code> 与 <code>attention/mamba/mamba2_metadata.py</code>。</p>
+    <p class="small">回查清单：博客对「为什么是 <code>2T</code> 而不是 <code>T</code>」是否有说明（本课的解释是重建）· <a href="../reference/replayssm-equations.html">公式卡 §3</a></p>
+  </div>
+</section>
+
+<section id="next">
+  <h2>下一课：账本 vs 实测</h2>
+  <p>算法层到这里齐了：带宽（第 1 课）、形状（第 2 课）、并行（第 3 课）、簿记（第 4 课）。四课算出来的账都很漂亮 —— kernel 级 1.4–1.8×。</p>
+  <p>但 SGLang 在 Qwen3.5 这类 MoE 模型上实测端到端只有 <strong>~2.3% TPOT</strong> 提升。第 5 课用 Amdahl 解释这个落差：<strong>当 GDN 层只占端到端时间的一小块时，把它加速 1.8× 能换来多少？</strong>并回答一个更实际的问题 —— 什么样的模型配置才值得上这套东西。这也是决定「要不要真去写 kernel」的那一课。</p>
+</section>
+
+</main>
+
+<footer class="lesson-footer">
+  <p><strong>有任何不清楚的地方，直接问我。</strong><code>2T</code> 的理由、三条不变量哪条还没想通、<code>L*</code> 的求导，都可以追问。</p>
+  <p>上一课：<a href="./0003-triangular-solve-speculative.html">一次三角求解，砍断串行链</a> · 术语：<a href="../reference/glossary.html">glossary</a> · 公式卡：<a href="../reference/replayssm-equations.html">replayssm-equations</a> · 验证脚本：<code>code/verify_replayssm_identities.py</code></p>
+  <p class="small">第 4 课 / 5 · 下一课：账本 vs 实测，为什么 MoE 端到端只有 2.3%</p>
+</footer>
+
+</div>
+<script src="../assets/quiz.js"></script>
+<script src="../assets/code-highlight.js"></script>
+<script src="../assets/flush-calc.js"></script>
+</body>
+</html>
