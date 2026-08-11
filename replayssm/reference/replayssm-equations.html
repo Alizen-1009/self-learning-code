@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>参考 · ReplaySSM 公式卡</title>
 <link rel="stylesheet" href="../assets/course.css">
+<link rel="stylesheet" href="../assets/ledger.css">
 </head>
 <body>
 <div class="course-shell">
@@ -28,7 +29,16 @@
     <div class="shape-card"><strong>L</strong><span class="shape">标量</span> buffer 容量</div>
     <div class="shape-card"><strong>T</strong><span class="shape">标量</span> 投机窗口长度</div>
     <div class="shape-card"><strong>a, Δ, g, β</strong><span class="shape">标量/步</span> 衰减与增益门</div>
+    <div class="shape-card"><strong>C</strong><span class="shape">(T, T)</span> 投机窗口的严格下三角耦合<span class="small">（博客记作 A<sub>s,s′</sub>）</span></div>
   </div>
+
+  <h3>衰减权重的箭头记号<span class="small">（本课程约定 · 第 3 课）</span></h3>
+  <div class="equation">
+    w(i → j) ≡ a<sub>i+1</sub> · a<sub>i+2</sub> ⋯ a<sub>j</sub> &nbsp;&nbsp;,&nbsp;&nbsp; w(j → j) = 1
+    <span class="eq-note">从位置 i 到位置 j 的累积衰减。<strong>凡本页出现 <code>w</code>，都是这个意思。</strong>第 1 课的 <code>w<sub>0</sub></code> = <code>w(0→h)</code>，<code>w<sub>j</sub></code> = <code>w(j→h)</code>。</span>
+  </div>
+  <p><strong>实现用前缀和，不做连乘</strong>（几十个 0.9 会下溢）：记 <code>pre<sub>j</sub> = Σ<sub>i≤j</sub> log a<sub>i</sub></code>，则 <code>log w(i→j) = pre<sub>j</sub> − pre<sub>i</sub></code> —— 一次前缀和出全部权重，任意区间的衰减都是两个前缀值相减。换回博客写法即 <code>s<sub>j,t</sub> = Δ<sub>j</sub> e<sup>A(pre<sub>t</sub>−pre<sub>j</sub>)</sup></code>（那个指数就是 <code>log w(j→t)</code>，<code>Δ<sub>j</sub></code> 是被折进 <code>v</code> 的增益）。</p>
+  <p class="small">代价：前缀和有 cancellation / 下溢风险。flush 顺带把范围夹在 ≤ <code>L</code> 个 token 内 —— 这是它除省显存之外的第二个好处。<strong>此浮点结论为推理，未实测</strong>，需用 recurrent baseline 验证。</p>
 </section>
 
 <section>
@@ -55,6 +65,29 @@
     <p><code>(v<sub>j</sub> k<sub>j</sub><sup>⊤</sup>) q<sub>t</sub> = v<sub>j</sub> (k<sub>j</sub><sup>⊤</sup> q<sub>t</sub>)</code> —— <code>dn</code> 次乘法变 <code>d+n</code> 次，<code>d×n</code> 矩阵从不物化。</p>
   </div>
 
+  <h3>两步推导<span class="small">（推导 · 第 1 课）</span></h3>
+  <p><strong>第一步 · 展开递推。</strong>从检查点 <code>S<sub>0</sub></code> 硬展开（增益折进 <code>v</code>，故递推为 <code>S<sub>t</sub> = a<sub>t</sub>S<sub>t−1</sub> + v<sub>t</sub>k<sub>t</sub><sup>⊤</sup></code>）：</p>
+  <div class="equation">
+    S<sub>1</sub> = a<sub>1</sub>S<sub>0</sub> + v<sub>1</sub>k<sub>1</sub><sup>⊤</sup><br>
+    S<sub>2</sub> = a<sub>2</sub>a<sub>1</sub>S<sub>0</sub> + a<sub>2</sub>·v<sub>1</sub>k<sub>1</sub><sup>⊤</sup> + v<sub>2</sub>k<sub>2</sub><sup>⊤</sup><br>
+    S<sub>3</sub> = a<sub>3</sub>a<sub>2</sub>a<sub>1</sub>S<sub>0</sub> + a<sub>3</sub>a<sub>2</sub>·v<sub>1</sub>k<sub>1</sub><sup>⊤</sup> + a<sub>3</sub>·v<sub>2</sub>k<sub>2</sub><sup>⊤</sup> + v<sub>3</sub>k<sub>3</sub><sup>⊤</sup>
+    <span class="eq-note">每个历史外积只被「它诞生之后的所有 <code>a</code>」连乘。<strong>成立的唯一条件是 <code>a</code> 为标量</strong>（或对角 —— 见下方注）。</span>
+  </div>
+  <div class="equation">
+    S<sub>h</sub> = w<sub>0</sub> S<sub>0</sub> + Σ<sub>j=1..h</sub> w<sub>j</sub> · v<sub>j</sub>k<sub>j</sub><sup>⊤</sup>
+    <span class="eq-note">w<sub>0</sub> = Π<sub>i=1..h</sub> a<sub>i</sub> &nbsp;·&nbsp; w<sub>j</sub> = Π<sub>i=j+1..h</sub> a<sub>i</sub>（故 <code>w<sub>h</sub> = 1</code>，最新 token 未衰减）。此步<strong>一分钱没省</strong>，仍物化 d×n。</span>
+  </div>
+  <p><strong>第二步 · 右乘 <code>q</code> 并对每项用结合律。</strong>省下来的全靠这一步：</p>
+  <div class="equation">
+    y = S<sub>h</sub>q = w<sub>0</sub>(S<sub>0</sub>q) + Σ<sub>j</sub> w<sub>j</sub>·(v<sub>j</sub>k<sub>j</sub><sup>⊤</sup>)q = w<sub>0</sub>(S<sub>0</sub>q) + Σ<sub>j</sub> w<sub>j</sub>·v<sub>j</sub>·(k<sub>j</sub><sup>⊤</sup>q)
+  </div>
+  <p><strong>与原始参数化的对应：</strong>实现不做连乘（会下溢），而在 log 空间用前缀和 <code>log w<sub>j</sub> = pre<sub>h</sub> − pre<sub>j</sub></code>。换回博客写法即 <code>s<sub>j,t</sub> = Δ<sub>j</sub> e<sup>A(pre<sub>t</sub>−pre<sub>j</sub>)</sup></code> —— 也就是本页的 <code>w<sub>j</sub></code> 乘上被折进 <code>v</code> 的那个增益 <code>Δ<sub>j</sub></code>。</p>
+
+  <div class="callout">
+    <span class="label">分工（值得记住）</span>
+    <p><strong>第一步（展开）</strong>买到的是「原始输入还在手上」→ 回滚与并行两个答案。<strong>第二步（结合律）</strong>买到的是「不必物化 d×n」→ 带宽那个答案。</p>
+  </div>
+
   <p><strong>Buffer 内容：</strong><code>{(v<sub>j</sub>, k<sub>j</sub>)}</code>。<strong>路线：</strong>output-only。</p>
 </section>
 
@@ -73,12 +106,62 @@
     <span class="eq-note">一旦 <code>u<sub>t</sub></code> 已知，形式就回到 Mamba-2，可以展开成衰减检查点 + <code>u<sub>j</sub> k<sub>j</sub><sup>⊤</sup></code> 的加权和。</span>
   </div>
 
+  <h3>三行代数<span class="small">（推导 · 第 2 课）</span></h3>
+  <p>记 <code>α<sub>t</sub> = e<sup>g<sub>t</sub></sup></code>。把投影矩阵乘开，再合并<strong>共用同一个 <code>k<sub>t</sub><sup>⊤</sup></code></strong> 的两个外积：</p>
+  <div class="equation">
+    α S(I − βkk<sup>⊤</sup>) + βvk<sup>⊤</sup><br>
+    = α S − αβ(S k)k<sup>⊤</sup> + βvk<sup>⊤</sup><br>
+    = α S + [βv − αβ(S k)]k<sup>⊤</sup><br>
+    = α S + β(v − α(S k))k<sup>⊤</sup>
+    <span class="eq-note">合并能成立，是因为 delta rule <strong>擦除的方向与写入的方向是同一个</strong>，两个外积右侧完全相同。</span>
+  </div>
+  <div class="equation is-hero">
+    u<sub>t</sub> = β<sub>t</sub> ( v<sub>t</sub> − α<sub>t</sub> (S<sub>t−1</sub> k<sub>t</sub>) )
+    <span class="eq-note">= 学习率 × (目标 − 预测)。<strong>就是 delta rule 的修正项</strong>，与 WY 表示的修正向量同源。</span>
+  </div>
+
+  <div class="callout">
+    <span class="label">两个易错点（均已数值验证）</span>
+    <p><strong>1. <code>α</code> 必须在括号内。</strong>预测要从<em>已衰减</em>的 state 读出。写成 <code>β(v − S k)</code> ⟹ 相对误差 <strong>31.8%</strong> —— 不够离谱，故极难抓。</p>
+    <p><strong>2. 不能把 <code>v</code> 直接塞进 Mamba-2 的加权和。</strong>⟹ 相对误差 <strong>105%</strong>。</p>
+    <p class="small">两条断言都写进了 <code>code/verify_replayssm_identities.py</code>（后者作为「必须失败」的测试）。</p>
+  </div>
+
   <p><strong>Buffer 内容：</strong><code>{(u<sub>j</sub>, k<sub>j</sub>, g<sub>j</sub>)}<sub>j=1..h</sub></code>。<strong>路线：</strong>state-and-output —— 一个 GDN step 需要在<strong>两个</strong>向量上读出（<code>q<sub>t</sub></code> 出 <code>y</code>，<code>k<sub>t</sub></code> 出 <code>u</code>），所以不能只走 output-only。</p>
+
+  <div class="callout">
+    <span class="label">代价究竟在哪<span class="small">（推导 · 第 2 课，纠正早期说法）</span></span>
+    <p><strong>不在带宽。</strong><code>S<sub>t−1</sub>k<sub>t</sub></code> 这次额外读出，本身也能用 output-only 展开算（已验证，偏差 <code>3e-15</code>），所以 <strong>GDN 同样从不物化、从不写回 state</strong>。搬运量与 Mamba-2 几乎相同（buffer 每 token 多存一个标量门），只是<strong>算术翻倍</strong>：对检查点 2 次 mat-vec、窗口内 2h 次内积，算术强度 0.5 → 1.0 FLOP/byte。仍远低于 GPU 拐点，故带宽收益基本完整保留。</p>
+    <p><strong>在串行纠缠。</strong><code>u<sub>t</sub></code> 依赖 <code>S<sub>t−1</sub></code> 依赖 <code>u<sub>1..t−1</sub></code>，窗口内的 <code>u</code> 串成依赖链。普通 decode 无害（每步只新算一个，算完即<strong>冻结</strong>）—— 这正是<strong>必须 cache <code>u</code> 而非 <code>v</code></strong> 的理由：cache <code>v</code> 就得每步重放整条链。但投机解码要同时求 T 个 <code>u</code>，链就成了拦路虎 → 下方三角求解。</p>
+  </div>
 
   <h3>投机验证：T×T 三角求解</h3>
   <div class="equation">
-    u<sub>s</sub> = R<sub>s</sub> − Σ<sub>s′&lt;s</sub> A<sub>s,s′</sub> u<sub>s′</sub>
-    <span class="eq-note"><code>R<sub>s</sub></code> 只依赖 drafts 与 <code>S<sub>h</sub></code>；<code>A</code> 严格下三角。T 个修正项由<strong>一次三角求解</strong>同时得到，替掉串行循环。</span>
+    u<sub>s</sub> = R<sub>s</sub> − Σ<sub>s′&lt;s</sub> C[s,s′] u<sub>s′</sub>
+    <span class="eq-note">博客把它记作 <code>A<sub>s,s′</sub></code>；本课程改用 <code>C</code>，避免与衰减参数 <code>A</code> 撞名，并把「严格下三角」写进名字。</span>
+  </div>
+
+  <h3>两半的定义<span class="small">（推导 · 第 3 课）</span></h3>
+  <p>记 <code>S<sub>h</sub></code> 为窗口末端状态，<code>w(i→j)</code> 为 i 到 j 的累积衰减（见上方「符号」）。把 <code>S<sub>(s 之前)</sub></code> 按第 1 课展开后代入 <code>u<sub>s</sub> = β<sub>s</sub>(v<sub>s</sub> − a<sub>s</sub>·S<sub>(s 之前)</sub>k<sub>s</sub>)</code>，再用 <code>a<sub>s</sub>·w(i→s−1) = w(i→s)</code> 吸收：</p>
+  <div class="equation">
+    R<sub>s</sub> = β<sub>s</sub> ( v<sub>s</sub> − w(0→s) · (S<sub>h</sub> k<sub>s</sub>) )<br>
+    C[s,s′] = β<sub>s</sub> · w(s′→s) · (k<sub>s′</sub><sup>⊤</sup> k<sub>s</sub>) &nbsp;&nbsp;(s′ &lt; s，否则 0)
+    <span class="eq-note"><code>R</code> 完全不含 <code>u</code> ⟹ T 个可并行。<strong>耦合强度 ∝ 两个 draft 的 key 内积</strong> ⟹ key 正交则 <code>C = 0</code>，完全解耦（已验证）。</span>
+  </div>
+  <div class="equation is-hero">
+    (I + C) U = R &nbsp;&nbsp;⟹&nbsp;&nbsp; U = (I + C)<sup>−1</sup> R
+    <span class="eq-note"><code>I + C</code> 单位下三角 ⟹ 行列式恒为 1，<strong>永远可逆</strong>。<code>T×T</code> 足够小，可显式求逆退化成一次 GEMM —— 即 prefill 的 <strong>UT transform</strong>，只是 chunk 换成投机窗口。</span>
+  </div>
+  <p>输出侧是一次 causal-masked GEMM，无任何串行依赖：</p>
+  <div class="equation">
+    y<sub>s</sub> = w(0→s) · (S<sub>h</sub> q<sub>s</sub>) + Σ<sub>s′≤s</sub> w(s′→s) · u<sub>s′</sub> · (k<sub>s′</sub><sup>⊤</sup> q<sub>s</sub>)
+  </div>
+
+  <div class="callout">
+    <span class="label">收益的准确表述</span>
+    <p>三角求解<strong>没有消灭</strong>串行依赖（前代法在 T 上仍串行），而是把它从「T 次昂贵的状态读出，每次 <code>O(d(n+h))</code>」<strong>压缩成</strong>「一个 <code>T×T</code> 小矩阵上的标量代入」—— 不碰检查点、不碰窗口、无新增显存流量。而后显式求逆把这点残余串行也变成 GEMM。</p>
+    <p class="small">kernel 层含义：<code>R</code> 与 <code>C</code> 是上 tensor core 的大活，求逆是留在寄存器/SMEM 的小活。</p>
+    <p><code>S<sub>h</sub></code> 全程<strong>不物化</strong>（<code>S<sub>h</sub>k<sub>s</sub></code>、<code>S<sub>h</sub>q<sub>s</sub></code> 都走第 1 课的展开）。回滚 = 写指针停在 <code>h + m</code>；被拒的 <code>u</code> 从未进入状态，无需撤销。</p>
   </div>
 </section>
 
@@ -86,10 +169,56 @@
   <h2>3 · Cache / Flush</h2>
   <ol class="steps">
     <li><strong>常规 step：</strong>把新输入 append 进 ring buffer，用内积公式算 <code>y<sub>t</sub></code>。不读写完整 state（只读 <code>S<sub>0</sub></code>）。</li>
-    <li><strong>Flush：</strong>当 <code>h + 2T &gt; L</code> 时，把 buffer 汇总进 <code>S<sub>0</sub></code>、清空 buffer、写回 HBM。<code>2T</code> 是给两轮投机窗口预留余量。</li>
+    <li><strong>Flush：</strong>当 <code>h + 2T &gt; L</code> 时，把 buffer 汇总进 <code>S<sub>0</sub></code>、清空 buffer、写回 HBM，并令 <code>h = 0</code>、<code>write_pos = 0</code>。</li>
     <li><strong>投机验证：</strong>draft append 进 buffer，用 masked GEMM 算 cached keys × draft queries。</li>
-    <li><strong>回滚：</strong>调整 buffer 写指针。零 state 恢复，零快照。</li>
+    <li><strong>回滚：</strong>把 <code>write_pos</code> 退到 <code>h + m</code>（<code>m</code> = 接受数），<code>h ← h + m</code>。零 state 恢复，零快照。</li>
   </ol>
+
+  <h3>三个正确性不变量<span class="small">（第 4 课 · 破了都不抛异常）</span></h3>
+  <ul class="invariants">
+    <li>
+      <strong><code>h + 2T ≤ L</code></strong>
+      <p>ring buffer 不得覆盖<strong>仍需的</strong>输入。</p>
+      <p class="breaks"><b>破了：</b>重建的状态缺项 → <b>静默算错</b>。已实测：L=4 → 282%、L=8 → 101%、L=16 → 37%、L=32 → 0.6%。<b>L 越大错得越轻 ⟹ 越危险</b>（像「精度问题」，能活到 benchmark）。</p>
+      <p class="small">为什么是 <code>2T</code> 而非 <code>T</code>：装下本轮只需 <code>h+T≤L</code>；多留一轮是因为 <code>write_pos</code> 每 forward 只能推进一次，<strong>不能在轮中间插入 flush</strong>，故须提前一轮保证最坏情况（<code>m=T</code>）也安全。<strong>此解释为本课程重建，博客未展开。</strong></p>
+    </li>
+    <li>
+      <strong><code>write_pos</code> 每 forward 只前进一次</strong>
+      <p>CUDA graph 要求：推进次数不能依赖运行时才知道的 <code>m</code>。做法是先推进一次、事后回退。</p>
+      <p class="breaks"><b>破了：</b>graph 重放时指针步数与录制不一致 → <b>静默算错，且关掉 CUDA graph 症状就消失</b> —— 极易误判成 graph 的 bug。</p>
+      <p class="small">来源：<a href="https://github.com/sgl-project/sglang/issues/28511">SGLang RFC #28511</a>。</p>
+    </li>
+    <li>
+      <strong>flush 边界对齐 radix cache snapshot 边界</strong>
+      <p>ReplaySSM 的状态是 <code>S<sub>0</sub> + buffer</code> <strong>两部分</strong>；快照点若落在 buffer 中间，存下的 <code>S<sub>0</sub></code> 不代表该 token 的状态。</p>
+      <p class="breaks"><b>破了：</b>别的请求复用错误快照 → <b>静默算错 + 跨请求污染</b>。三条里最难定位（并发相关、不确定复现）。</p>
+      <p class="small">这是 RFC 要改 <code>attention/mamba/mamba2_metadata.py</code> 的原因。</p>
+    </li>
+  </ul>
+
+  <div class="callout">
+    <span class="label">回滚是<em>精确</em>的零<span class="small">（推导 · 第 4 课）</span></span>
+    <p>「接受 m 个后退指针」与「一开始只跑那 m 个」偏差 <strong>0.00e+00</strong>（不是 <code>1e-15</code>）。因为被拒 draft 的 <code>u</code> 虽写进了槽位，但 <code>h</code> 未计入，<strong>重建求和根本不遍历它们</strong> —— 不是被减掉，是压根没被加进去。</p>
+  </div>
+
+  <h3><code>L</code> 的两侧约束<span class="small">（推导 · 第 4 课）</span></h3>
+  <div class="equation">
+    每步搬运 = 4dn + 4·h̄·(d+n) + 4dn/周期 &nbsp;&nbsp;⟹&nbsp;&nbsp; L* = √( 2dn/(d+n) )
+    <span class="eq-note">三项分别是读检查点、读 buffer、flush 摊薄写回。<code>h̄ ≈ L/2</code>。d=n=128 ⟹ <code>L* ≈ 11</code>，数值扫描得 <strong>12</strong>，收益 <strong>1.71×</strong>。极小很平坦（L=8–16 都约 1.70×）。</span>
+  </div>
+  <p><strong>下界来自投机窗口：</strong><code>L ≤ 2T</code> ⟹ <code>h</code> 恒为 0，buffer 一次都用不上；<code>L ≥ 3T</code> 才能连做两轮、buffer 才真正非空。<strong>两侧一撞（d=n=128）：</strong></p>
+  <table class="ledger">
+    <thead><tr><th>T</th><th>下界 3T</th><th>取该 L 的收益</th></tr></thead>
+    <tbody>
+      <tr><th>1</th><td>3</td><td class="win">1.71×（可取 L≈12）</td></tr>
+      <tr><th>4</th><td>12</td><td class="win">1.71×（刚好撞上最优）</td></tr>
+      <tr><th>8</th><td>24</td><td>1.65×</td></tr>
+      <tr><th>16</th><td>48</td><td class="cost">1.45×</td></tr>
+    </tbody>
+  </table>
+  <p class="small"><strong>投机窗口收两次费：</strong>第 3 课的 <code>T²</code> 内积（每 token <code>1 + T/(2h)</code>），加这里的「抬高 <code>L</code> 下界、逼离带宽最优点」。两笔独立。<br>
+  <strong>与第 1 课的关系：</strong>第 1 课算<em>瞬时</em> <code>h</code> 的临界点 <code>dn/(d+n)=64</code>；这里是<em>周期平均</em>，故对应 <code>L</code> 的归零处是 <code>2dn/(d+n)=128</code>（已验证：L=128 ⟹ 1.00×）。<br>
+  <strong>附带好处（推理，未实测）：</strong>flush 把衰减前缀和跨度夹在 ≤ <code>L</code> 内，可能改善数值稳定性。需用 recurrent baseline 在长序列上验证。</p>
 </section>
 
 <section>
@@ -100,9 +229,17 @@
     </tr>
     <tr><td style="text-align:left;padding:11px">state traffic / head / step</td><td style="padding:11px"><code>8dn</code></td><td style="padding:11px"><code>4dn</code></td></tr>
     <tr style="background:rgba(255,255,255,.6)"><td style="text-align:left;padding:11px">每 buffer token 的构造 FLOPs</td><td style="padding:11px"><code>dn</code></td><td style="padding:11px"><code>d+n</code>（d=n=128 → 64×）</td></tr>
-    <tr><td style="text-align:left;padding:11px">投机额外内积</td><td style="padding:11px">串行，不可 GEMM</td><td style="padding:11px"><code>T(T+h)</code></td></tr>
+    <tr><td style="text-align:left;padding:11px">投机额外内积</td><td style="padding:11px">串行，不可 GEMM</td><td style="padding:11px"><code>T(T+h)</code> 量级<span class="small">（GDN 实为 <code>2Th + T²</code>，见下）</span></td></tr>
+    <tr><td style="text-align:left;padding:11px">投机每 token 开销<span class="small">（推导）</span></td><td style="padding:11px">—</td><td style="padding:11px"><code>1 + T/(2h)</code></td></tr>
     <tr style="background:rgba(255,255,255,.6)"><td style="text-align:left;padding:11px">buffer 长度上界<span class="small">（推导）</span></td><td style="padding:11px">—</td><td style="padding:11px"><code>h &lt; dn/(d+n)</code> = 64</td></tr>
   </table>
+
+  <div class="callout">
+    <span class="label">投机内积的精确计数<span class="small">（推导 · 第 3 课）</span></span>
+    <p>四份：<code>R</code> 的窗口部分 <code>T·h</code>、<code>C</code> 的 draft 间部分 <code>T(T−1)/2</code>、<code>y</code> 的窗口部分 <code>T·h</code>、<code>y</code> 的 draft 间部分 <code>T(T+1)/2</code>。<strong>合计 <code>2Th + T²</code></strong>，每 token 摊到 <code>2h + T</code>；单步 decode 是 <code>2h</code>，故开销 <code>1 + T/(2h)</code>。</p>
+    <p><strong>与博客 <code>T(T+h)</code> 的差异：</strong><code>T(T+h)</code> 对应<strong>单条读出路径</strong>；GDN 走 state-and-output route，<strong>需要两条</strong>（出 <code>u</code>、出 <code>y</code>），故约为其两倍。两者同为 <code>Θ(T(T+h))</code>，二次项结论不变。Mamba-2 只需一条，接近 <code>T(T+h)</code> 本身。</p>
+    <p class="small">二次项全部来自 draft 之间的两两 key 内积；窗口部分只贡献线性的 <code>2Th</code>。<code>T=8,h=32</code> → 二次项占 11%，开销 1.13×；<code>T=16,h=32</code> → 占 20%，开销 1.25×。</p>
+  </div>
 
   <h3>实测（博客 §6）</h3>
   <p>Nemotron-3（Mamba-2）与 Qwen3.5（GDN），至 550B，H100 / B300：kernel <strong>1.43–1.84×</strong>，端到端 <strong>1.20–1.48×</strong>；投机吞吐 <strong>1.87–1.96×</strong>（对 vLLM baseline 至 2.14×）；固定 HBM 预算并发 <strong>3.0–3.3×</strong>。</p>
@@ -125,7 +262,8 @@
 
 <footer class="lesson-footer">
   <p>Primary source：<a href="https://tridao.me/blog/2026/replayssm/">ReplaySSM — Tri Dao</a> · 参考实现：<a href="https://github.com/Johnny-Liou/ReplaySSM.git">Johnny-Liou/ReplaySSM</a></p>
-  <p>相关：<a href="./glossary.html">glossary</a> · <a href="../lessons/0001-decode-ledger-history-route.html">第 1 课</a> · <a href="../MISSION.md">MISSION.md</a></p>
+  <p>相关：<a href="./glossary.html">glossary</a> · <a href="../lessons/0001-decode-byte-ledger.html">第 1 课</a> · <a href="../lessons/0002-gdn-pseudo-value.html">第 2 课</a> · <a href="../lessons/0003-triangular-solve-speculative.html">第 3 课</a> · <a href="../lessons/0004-cache-flush-invariants.html">第 4 课</a> · <a href="../MISSION.md">MISSION.md</a></p>
+  <p class="small">标注「推导」的小节由本课程补出，不是博客原文，全部断言由 <code>code/verify_replayssm_identities.py</code> 数值验证（fp64，容差 1e-13）。</p>
 </footer>
 
 </div>

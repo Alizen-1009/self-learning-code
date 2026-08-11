@@ -30,7 +30,8 @@
   <p>在 history route 上再用一次结合律 <code>(v k<sup>⊤</sup>) q = v (k<sup>⊤</sup> q)</code>，直接算出 <code>y<sub>t</sub></code>，<strong>完全不物化 state 矩阵</strong>。Mamba-2 走这条路。</p>
 
   <h3>State-and-output route（状态与输出形式）</h3>
-  <p>仍需要在某些位置物化/读出 state 的形式。<strong>GDN 走这条路</strong>，因为 delta rule 的每一步都需要在两个向量上读出：<code>q<sub>t</sub></code> 出 <code>y<sub>t</sub></code>，<code>k<sub>t</sub></code> 出 <code>u<sub>t</sub></code>。</p>
+  <p>每步需要在<strong>两个</strong>向量上读出的形式：<code>q<sub>t</sub></code> 出 <code>y<sub>t</sub></code>（这一层的输出），<code>k<sub>t</sub></code> 出预测、进而出 <code>u<sub>t</sub></code>（喂给自己的状态更新）。<strong>GDN 走这条路。</strong></p>
+  <p class="small">⚠️ 注意它<strong>不</strong>意味着要物化 state。<code>S<sub>t−1</sub>k<sub>t</sub></code> 与 <code>S<sub>t−1</sub>q<sub>t</sub></code> 形式相同，同样能用 output-only 展开算出（已数值验证，偏差 <code>3e-15</code>）。GDN 与 Mamba-2 一样从不写回 state；差别只是算术翻倍（0.5 → 1.0 FLOP/byte，仍 memory-bound）与窗口内 <code>u</code> 的串行纠缠。详见<a href="../lessons/0002-gdn-pseudo-value.html">第 2 课</a>。</p>
 
   <h3>检查点 state（checkpoint state, <code>S<sub>0</sub></code>）</h3>
   <p>buffer 窗口之前所有历史的摘要，<code>(d, n)</code>。常规 step 中<strong>只读不写</strong>；只在 flush 时更新并写回 HBM。</p>
@@ -52,7 +53,7 @@
   <p>序列长度为 1 的前向。chunk 消失，GEMM 退化成 mat-vec，算术强度掉到 ~1 FLOP/byte —— 与 prefill 的 compute-bound 局面相反，这里是 <strong>memory-bound</strong>。</p>
 
   <h3>投机窗口（<code>T</code>）</h3>
-  <p>一轮投机解码提出的 draft token 数量。ReplaySSM 中它带来 <code>T(T+h)</code> 的额外内积开销 —— 这是换取并行验证付出的代价。</p>
+  <p>一轮投机解码提出的 draft token 数量。ReplaySSM 中它带来 <code>Θ(T(T+h))</code> 的额外内积开销（GDN 精确为 <code>2Th + T²</code>，每 token 开销 <code>1 + T/(2h)</code>）—— 这是换取并行验证付出的代价。见<a href="../lessons/0003-triangular-solve-speculative.html">第 3 课</a> · <a href="../lessons/0004-cache-flush-invariants.html">第 4 课</a>。</p>
 
   <h3>State 快照（state snapshot）</h3>
   <p><strong>ReplaySSM 要消灭的东西。</strong>既有投机解码方案为了能回滚，给每个 draft token 存一份完整 <code>d×n</code> state，搬运量乘上 <code>T</code>，并发被显存挤死。参见 <a href="https://proceedings.mlr.press/v262/wu24a.html">Snakes and Ladders</a>。</p>
@@ -61,7 +62,7 @@
   <p>投机验证的核心操作：一次算出 cached keys 与全部 draft queries 的内积，用 causal mask 屏蔽不该看到的位置。取代逐 draft 的串行循环。</p>
 
   <h3>三角求解（triangular solve）</h3>
-  <p>GDN 投机验证中解 <code>u<sub>s</sub> = R<sub>s</sub> − Σ<sub>s′&lt;s</sub> A<sub>s,s′</sub> u<sub>s′</sub></code> 的手段。<code>A</code> 严格下三角，<code>T×T</code> 规模，一次解出全部 <code>T</code> 个修正项。<strong>与 prefill 里 UT transform 求 <code>(I − tril(A))<sup>−1</sup></code> 是同一类操作</strong>，只是这里的"chunk"是投机窗口而不是序列 chunk。</p>
+  <p>GDN 投机验证中解 <code>u<sub>s</sub> = R<sub>s</sub> − Σ<sub>s′&lt;s</sub> C[s,s′] u<sub>s′</sub></code> 的手段。<code>C</code> 严格下三角（博客记作 <code>A<sub>s,s′</sub></code>；本课程改用 <code>C</code>，避免与衰减参数 <code>A</code> 及 buffer 容量 <code>L</code> 撞名），<code>T×T</code> 规模，一次解出全部 <code>T</code> 个修正项。<strong>与 prefill 里 UT transform 求 <code>(I − tril(A))<sup>−1</sup></code> 是同一类操作</strong>，只是这里的"chunk"是投机窗口而不是序列 chunk。</p>
 
   <h3>TPOT（time per output token）</h3>
   <p>每输出 token 的时间，decode 阶段的核心端到端指标。注意 <strong>kernel 加速 ≠ TPOT 加速</strong>：MoE 模型里 GDN 层占比低，Amdahl 上限会把收益压到很小（SGLang 实测 Qwen3.5 仅 ~2.3%）。</p>
@@ -80,7 +81,7 @@
 
 <footer class="lesson-footer">
   <p>Primary source：<a href="https://tridao.me/blog/2026/replayssm/">ReplaySSM — Tri Dao</a></p>
-  <p>相关：<a href="./replayssm-equations.html">公式卡</a> · <a href="../lessons/0001-decode-ledger-history-route.html">第 1 课</a> · <a href="../RESOURCES.md">RESOURCES.md</a></p>
+  <p>相关：<a href="./replayssm-equations.html">公式卡</a> · <a href="../lessons/0001-decode-byte-ledger.html">第 1 课</a> · <a href="../lessons/0002-gdn-pseudo-value.html">第 2 课</a> · <a href="../lessons/0003-triangular-solve-speculative.html">第 3 课</a> · <a href="../lessons/0004-cache-flush-invariants.html">第 4 课</a> · <a href="../RESOURCES.md">RESOURCES.md</a></p>
 </footer>
 
 </div>
