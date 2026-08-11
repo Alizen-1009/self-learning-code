@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 3 课 · 一次三角求解，砍断串行链</title>
+<link rel="stylesheet" href="../assets/course.css">
+<link rel="stylesheet" href="../assets/ledger.css">
+</head>
+<body>
+<div class="course-shell">
+
+<header class="lesson-header">
+  <p class="eyebrow">ReplaySSM · 第 3 课</p>
+  <h1>一次三角求解，<br>砍断串行链</h1>
+  <p class="deck">第 2 课留下一条依赖链：T 个 draft 的伪 value 彼此依赖，看起来只能一个一个算。这一课把这条链压成一个 T×T 的严格下三角系统 —— 而你在 prefill 里已经解过同一类方程了。</p>
+  <div class="lesson-meta">
+    <span class="pill">算法层 · 不写 kernel</span>
+    <span class="pill">约 18 分钟</span>
+    <span class="pill">符号预算 15 个（新增 3 个）</span>
+  </div>
+</header>
+
+<nav class="lesson-nav">
+  <a href="#objective">收获</a>
+  <a href="#debt">补上欠账</a>
+  <a href="#wall">串行墙</a>
+  <a href="#split">分离依赖</a>
+  <a href="#system">T×T 系统</a>
+  <a href="#why">为什么算胜利</a>
+  <a href="#output">y 也一样</a>
+  <a href="#ledger">账本</a>
+  <a href="#quiz">检查</a>
+  <a href="#retrieval">检索</a>
+</nav>
+
+<main>
+
+<section id="objective">
+  <div class="objective">
+    <span class="label">本课唯一收获</span>
+    <p>能把 <code>u<sub>s</sub></code> 对前面所有 <code>u</code> 的依赖<strong>分离</strong>成「一个与 u 无关的部分」加「一个严格下三角的耦合」，写出 <code>(I + C) U = R</code>，并说清这一步到底赢在哪 —— 以及它<strong>没有</strong>赢在哪。</p>
+  </div>
+  <div class="aside">
+    <p><strong>新增符号 3 个：</strong><code>T</code>（投机窗口的 draft 数）、<code>R</code>（与 u 无关的那一半）、<code>C</code>（T×T 严格下三角耦合矩阵）。draft 窗口的衰减权重<strong>沿用 <code>w</code></strong>，不新起名字。</p>
+    <p><strong>坦白一句：</strong>我给自己定的规矩是「符号超过 12 就拆课」，这一课 15 个，破了规矩。原因是 <code>(I+C)U = R</code> 两侧都必须有名字，而把推导和它的收益拆到两课会让两边都读不懂。这是一次有意识的权衡，不是失控 —— 代价是这一课比前两课重，请留足时间。</p>
+  </div>
+</section>
+
+<section id="debt">
+  <h2>先补上第 1 课的欠账：<code>w</code> 到底是什么</h2>
+
+  <p>第 1 课我把衰减权重含糊地叫做「标量权重 <code>w</code>」，说具体形式后面再讲。现在讲，因为这一课要用它。</p>
+
+  <p>它的定义就是<strong>一段连乘</strong> —— 从某个位置到另一个位置之间，所有衰减门的乘积。既然如此，不如直接把「从哪到哪」写进记号里：</p>
+
+  <div class="equation is-hero">
+    w(i → j) &nbsp;≡&nbsp; a<sub>i+1</sub> · a<sub>i+2</sub> ⋯ a<sub>j</sub>
+    <span class="eq-note">从位置 i 到位置 j 的累积衰减。约定 <code>w(j → j) = 1</code>（空乘积）。</span>
+  </div>
+
+  <p>第 1 课那个公式于是变得可读多了 —— 它其实一直在说「每个输入按它到现在的距离打折」：</p>
+
+  <div class="equation">
+    y = w(0 → h) · (S<sub>0</sub> q) &nbsp;+&nbsp; Σ<sub>j=1..h</sub> w(j → h) · u<sub>j</sub> · (k<sub>j</sub><sup>⊤</sup> q)
+    <span class="eq-note">与<a href="./0001-decode-byte-ledger.html">第 1 课</a>的公式完全相同，只是把 <code>w<sub>0</sub></code>、<code>w<sub>j</sub></code> 换成了带箭头的写法。（这里已用第 2 课的 <code>u</code>，所以对 GDN 也成立。）</span>
+  </div>
+
+  <div class="callout">
+    <span class="label">实现不做连乘</span>
+    <p>连乘几十个 0.9 会下溢。实际做法是在 log 空间用<strong>一次前缀和</strong>：记 <code>pre<sub>j</sub> = Σ<sub>i≤j</sub> log a<sub>i</sub></code>，则 <code>log w(i → j) = pre<sub>j</sub> − pre<sub>i</sub></code>。<strong>一次前缀和出全部权重</strong>，任意区间的衰减都是两个前缀值相减。</p>
+    <p class="small">换回博客的写法就是 <code>s<sub>j,t</sub> = Δ<sub>j</sub> e<sup>A(pre<sub>t</sub>−pre<sub>j</sub>)</sup></code>：那个 <code>e</code> 的指数就是 <code>log w(j → t)</code>，前面的 <code>Δ<sub>j</sub></code> 是被我折进 <code>v</code> 的输入增益。见<a href="../reference/replayssm-equations.html">公式卡</a>。</p>
+    <p class="small">代价：前缀和有 cancellation 与下溢风险。<a href="#next">第 4 课</a>会指出 flush 顺带把这个范围夹在了 ≤ <code>L</code> 个 token 内 —— 这是它除了省显存之外的第二个好处。</p>
+  </div>
+
+  <p>还有一个你已经见过它的地方：<code>w(j → t)</code> 作为 <strong>j 和 t 的函数</strong>，正是你在 prefill 里画的那个带衰减的下三角权重矩阵。decode 时你只用它的最后一行；<strong>投机解码时你要用它的一整个 T×T 角落</strong> —— 这就是这一课的全部内容。</p>
+</section>
+
+<section id="wall">
+  <h2>病灶：投机验证的串行墙</h2>
+
+  <p>投机解码一轮的任务：给定 <code>T</code> 个 draft token，<strong>同时</strong>算出它们各自的输出 <code>y</code>（用来判断接受到第几个），以及各自的伪 value <code>u</code>（接受了就要 append 进 buffer）。</p>
+
+  <p>第 2 课那条链让这件事看起来不可能：</p>
+
+  <div class="equation">
+    u<sub>1</sub> → S → u<sub>2</sub> → S → u<sub>3</sub> → ⋯ → u<sub>T</sub>
+    <span class="eq-note">每个 <code>u</code> 都要先知道前一个，因为它需要在<strong>已经吸收了前面所有 draft</strong> 的状态上做一次读出。</span>
+  </div>
+
+  <p>照这条链老实做，一轮验证要 <code>T</code> 次<strong>完整读出</strong>，每次都要走一遍「检查点 + 整个窗口」。T 个 token 的成本是单步的 T 倍 —— 投机解码就白做了，它的全部意义就在于用一次前向换多个 token。</p>
+
+  <div class="callout">
+    <span class="label">对照：Transformer 为什么没这个问题</span>
+    <p>attention 里第 s 个 draft 的输出只依赖<strong>输入</strong>（所有 K、V），不依赖前面 draft 的任何<strong>中间产物</strong>。所以 T 个 draft 天然可以塞进一次 batched GEMM。SSM 的麻烦在于状态是逐步累积的中间产物 —— 而 delta rule 又让这个累积依赖读出。</p>
+  </div>
+</section>
+
+<section id="split">
+  <h2>关键一步：把依赖分离出来</h2>
+
+  <p class="lede">链看起来不可拆，是因为我们一直把它当成「算完一个再算下一个」。换个问法：<strong><code>u<sub>s</sub></code> 里到底有多少东西真的依赖前面的 <code>u</code>？</strong></p>
+
+  <p>记 <code>S<sub>h</sub></code> 为窗口末端的状态（h 个已提交 token 都吸收完之后）。第 s 个 draft 要读出的那个状态，是 <code>S<sub>h</sub></code> 再吸收 s−1 个 draft 之后的样子 —— 而这个东西可以用<strong>第 1 课的展开</strong>写出来：</p>
+
+  <div class="equation">
+    S<sub>(s 之前)</sub> = w(0 → s−1) · S<sub>h</sub> &nbsp;+&nbsp; Σ<sub>s′&lt;s</sub> w(s′ → s−1) · u<sub>s′</sub> k<sub>s′</sub><sup>⊤</sup>
+    <span class="eq-note">这里的 <code>w</code> 走的是 draft 窗口内的衰减门。注意右边只有 <code>S<sub>h</sub></code> 和 <code>u<sub>s′</sub></code> 两种东西。</span>
+  </div>
+
+  <p>代进 <code>u<sub>s</sub></code> 的定义（第 2 课那条），并对每一项用<strong>第 1 课的结合律</strong>把外积消掉：</p>
+
+  <pre><code class="language-python">u_s = β_s ( v_s − a_s · S_(s之前) · k_s )
+
+    = β_s·v_s − β_s·a_s·w(0→s−1)·(S_h k_s)                    # 与 u 无关
+              − β_s·a_s·Σ_{s′&lt;s} w(s′→s−1)·(k_s′ᵀ k_s)·u_s′   # 依赖前面的 u
+
+# 把 a_s 吸收进 w：a_s · w(i→s−1) = w(i→s)
+    = β_s ( v_s − w(0→s)·(S_h k_s) )  −  β_s·Σ_{s′&lt;s} w(s′→s)·(k_s′ᵀ k_s)·u_s′
+      └────────────  R_s  ────────────┘     └──────── C[s,s′] ────────┘
+</code></pre>
+
+  <p>依赖被干净地切成两半。给两半各起一个名字：</p>
+
+  <div class="shape-grid">
+    <div class="shape-card"><strong>R<sub>s</sub></strong><span class="shape">(d,)</span> = β<sub>s</sub>( v<sub>s</sub> − w(0→s)·(S<sub>h</sub>k<sub>s</sub>) )。<strong>只依赖 draft 自己和窗口末端</strong> —— 全部 T 个可以一次并行算完。</div>
+    <div class="shape-card"><strong>C[s,s′]</strong><span class="shape">标量</span> = β<sub>s</sub>·w(s′→s)·(k<sub>s′</sub><sup>⊤</sup>k<sub>s</sub>)。只在 <code>s′ &lt; s</code> 时非零 —— <strong>严格下三角</strong>。</div>
+  </div>
+
+  <div class="equation is-hero">
+    u<sub>s</sub> = R<sub>s</sub> − Σ<sub>s′&lt;s</sub> C[s,s′] · u<sub>s′</sub>
+    <span class="eq-note">这就是<a href="../reference/replayssm-equations.html">公式卡</a>与博客里那条式子（原文把 <code>C</code> 记作 <code>A<sub>s,s′</sub></code>；我改用 <code>C</code>，一是避免和衰减参数 <code>A</code> 撞名，二是直接把「严格下三角」写进名字）。</span>
+  </div>
+
+  <div class="callout">
+    <span class="label">耦合强度就是 key 的重合度</span>
+    <p>盯住 <code>C[s,s′]</code> 里的 <code>k<sub>s′</sub><sup>⊤</sup>k<sub>s</sub></code>：<strong>两个 draft 之间的耦合，正比于它们 key 的内积。</strong>如果所有 draft 的 key 两两正交，<code>C</code> 全是 0，T 个 <code>u</code> 彼此完全独立 —— 链根本不存在。</p>
+    <p class="small">这很符合直觉：delta rule 的干扰来自「往同一个 key 方向反复写」。写到互不相干的地方，就互不干扰。这条已数值验证（<code>C</code> 最大元 <code>6e-17</code>）。</p>
+  </div>
+</section>
+
+<section id="system">
+  <h2>写成矩阵：一个 T×T 的三角系统</h2>
+
+  <p>把 T 个 <code>u<sub>s</sub></code> 堆成一个 <code>T×d</code> 的矩阵 <code>U</code>（每行一个 draft），<code>R</code> 同理。上面那条式子就是：</p>
+
+  <div class="equation is-hero">
+    (I + C) · U = R &nbsp;&nbsp;⟹&nbsp;&nbsp; U = (I + C)<sup>−1</sup> R
+    <span class="eq-note"><code>C</code> 是 <code>T×T</code> 严格下三角，所以 <code>I + C</code> 单位下三角 —— <strong>行列式恒为 1，永远可逆</strong>，不需要任何数值上的担心。</span>
+  </div>
+
+  <p><code>T = 4</code> 时 <code>I + C</code> 长这样。绿色是对角的 1，棕色是耦合项，灰色恒为 0：</p>
+
+  <div class="matrix-wrap">
+    <table class="matrix-table">
+      <tr>
+        <td class="diagonal">1</td><td class="future">0</td><td class="future">0</td><td class="future">0</td>
+      </tr>
+      <tr>
+        <td class="history">C₂₁</td><td class="diagonal">1</td><td class="future">0</td><td class="future">0</td>
+      </tr>
+      <tr>
+        <td class="history">C₃₁</td><td class="history">C₃₂</td><td class="diagonal">1</td><td class="future">0</td>
+      </tr>
+      <tr>
+        <td class="history">C₄₁</td><td class="history">C₄₂</td><td class="history">C₄₃</td><td class="diagonal">1</td>
+      </tr>
+    </table>
+  </div>
+
+  <p class="citation">第一行是空的 —— 所以 <code>u<sub>1</sub> = R<sub>1</sub></code>，第一个 draft 从来不需要求解。这是个有用的自检点。</p>
+
+  <p>这张图你应该觉得眼熟。它和你在 prefill 做 <strong>UT transform</strong> 时求逆的那个矩阵是<strong>同一个形状</strong> —— 单位下三角，来自 delta rule 在一个窗口内的自我干扰。区别只在于「窗口」是什么：</p>
+
+  <table class="ledger">
+    <caption>同一个技巧，两个场景</caption>
+    <thead><tr><th></th><th>prefill（你已掌握）</th><th>decode 投机验证（本课）</th></tr></thead>
+    <tbody>
+      <tr><th>窗口是</th><td>序列 chunk</td><td>投机窗口</td></tr>
+      <tr><th>窗口大小</th><td>64 / 128</td><td>T，通常 4–16</td></tr>
+      <tr><th>要解的东西</th><td>chunk 内的 WY 修正项</td><td>T 个 draft 的伪 value</td></tr>
+      <tr><th>矩阵</th><td>单位下三角，来自 chunk 内 key 互相干扰</td><td>单位下三角，来自 draft 间 key 互相干扰</td></tr>
+    </tbody>
+  </table>
+
+  <p class="lede">所以这一课的结论可以一句话说完：<strong>ReplaySSM 把 prefill 的 UT transform 搬到了 decode，只是把 chunk 换成了投机窗口。</strong></p>
+</section>
+
+<section id="why">
+  <h2>为什么这算胜利 —— 以及它没赢在哪</h2>
+
+  <p>这里必须小心，容易自欺。<strong>三角求解用前代法做，在 T 上仍然是串行的</strong>：先出 <code>u<sub>1</sub></code>，才能出 <code>u<sub>2</sub></code>。链并没有消失。</p>
+
+  <p>赢的地方在于<strong>链上串的东西变了</strong>：</p>
+
+  <ul class="answers">
+    <li><strong>之前</strong>T 次<strong>完整读出</strong>串行。每次都要走一遍检查点加整个窗口，每次都是 <code>O(d(n+h))</code> 的搬运与计算。</li>
+    <li><strong>之后</strong>T 次<strong>标量代入</strong>串行。<code>R</code> 和 <code>C</code> 已经算好了，前代只是在 <code>T×d</code> 的小块上做加减 —— 不碰检查点，不碰窗口，没有新的显存流量。</li>
+    <li><strong>而且</strong>贵的那两样（<code>R</code> 和 <code>C</code>）本身<strong>完全并行</strong>：<code>R</code> 是一次批量读出（GEMM），<code>C</code> 是一次 <code>T×T</code> 的 key-key 内积（GEMM）。</li>
+  </ul>
+
+  <p>还能更进一步。<code>I + C</code> 只有 <code>T×T</code>，小到可以<strong>显式求逆</strong>（这正是 UT transform 的做法），于是连前代都省了：</p>
+
+  <div class="equation">
+    U = (I + C)<sup>−1</sup> · R
+    <span class="eq-note">一次 <code>T×T</code> 乘 <code>T×d</code> 的 GEMM，<strong>在 T 上完全并行</strong>。已验证与三角求解逐位等价（偏差 <code>4e-16</code>）。</span>
+  </div>
+
+  <div class="callout">
+    <span class="label">所以准确的说法是</span>
+    <p>三角求解<strong>没有消灭</strong>串行依赖，它把依赖从「T 次昂贵的状态读出」<strong>压缩成</strong>「一个 T×T 的小矩阵」。而这个小矩阵可以整个求逆，于是最后连那点串行也变成了一次 GEMM。</p>
+    <p class="small">这个区分不是吹毛求疵。它决定了 kernel 该怎么写：<code>R</code> 和 <code>C</code> 是要上 tensor core 的大活，求逆是留在寄存器/SMEM 里的小活。搞错了就会去优化错的地方。</p>
+  </div>
+</section>
+
+<section id="output">
+  <h2><code>y</code> 也是一次 masked GEMM</h2>
+
+  <p><code>U</code> 解出来之后，输出就没有任何依赖问题了 —— 直接套第 1 课的公式，只是求和范围到 <code>s</code> 为止：</p>
+
+  <div class="equation">
+    y<sub>s</sub> = w(0 → s) · (S<sub>h</sub> q<sub>s</sub>) &nbsp;+&nbsp; Σ<sub>s′≤s</sub> w(s′ → s) · u<sub>s′</sub> · (k<sub>s′</sub><sup>⊤</sup> q<sub>s</sub>)
+    <span class="eq-note">那个 <code>s′ ≤ s</code> 就是 causal mask。所有 T 个 <code>y</code> 一次算完。已验证 ≡ 串行结果（偏差 <code>9e-15</code>）。</span>
+  </div>
+
+  <p>注意 <code>S<sub>h</sub></code> 全程<strong>没有被物化</strong>：<code>S<sub>h</sub>k<sub>s</sub></code> 和 <code>S<sub>h</sub>q<sub>s</sub></code> 都用第 1 课的展开（检查点 + 窗口）算出来。整条投机验证路径上，那个 <code>d×n</code> 矩阵依然一次都没出现。<span class="small">（验证偏差 <code>1e-14</code>。）</span></p>
+
+  <p>回滚就更简单了：接受到第 m 个，就把 buffer 的写指针停在 <code>h + m</code>。被拒的那几个 <code>u</code> 是算出来了没用上 —— <strong>算错的东西从来没进过状态，所以没有任何东西需要撤销。</strong></p>
+</section>
+
+<section id="ledger">
+  <h2>账本：二次项从哪来</h2>
+
+  <p>投机验证的开销全部是<strong>内积</strong>，分四份：</p>
+
+  <table class="ledger">
+    <caption>一轮投机验证（T 个 draft，窗口内 h 个 token），单 head</caption>
+    <thead><tr><th>来源</th><th>内积个数</th><th>为什么</th></tr></thead>
+    <tbody>
+      <tr><th>R 的窗口部分</th><td><code>T · h</code></td><td>每个 draft 都要在窗口的 h 个 key 上读出一次</td></tr>
+      <tr><th>C 的 draft 间部分</th><td><code>T(T−1)/2</code></td><td class="cost">严格下三角 ← 二次项在这</td></tr>
+      <tr><th>y 的窗口部分</th><td><code>T · h</code></td><td>同上，但读出向量是 q</td></tr>
+      <tr><th>y 的 draft 间部分</th><td><code>T(T+1)/2</code></td><td class="cost">含对角的 causal mask ← 二次项在这</td></tr>
+      <tr><th>合计</th><td><code>2Th + T²</code></td><td>每 token 摊到 <code>2h + T</code></td></tr>
+    </tbody>
+  </table>
+
+  <p>而单步 decode 的内积数是 <code>2h</code>（<code>u</code> 一条、<code>y</code> 一条）。所以：</p>
+
+  <div class="equation is-hero">
+    每 token 开销 = (2h + T) / 2h = 1 + T / (2h)
+    <span class="eq-note">投机窗口相对缓存窗口越短，越接近免费。<code>T=8, h=32</code> 时只多 <strong>12.5%</strong>。</span>
+  </div>
+
+  <div class="aside">
+    <p><strong>与公式卡的差异，说明一下。</strong>公式卡（转自博客）记的是 <code>T(T+h)</code>，我这里数出来是 <code>2Th + T²</code>，约两倍。原因是 <code>T(T+h)</code> 对应<strong>单条读出路径</strong>；而 GDN 是第 2 课讲的 state-and-output route，<strong>需要两条</strong>（一条出 <code>u</code>，一条出 <code>y</code>）。两者同为 <code>Θ(T(T+h))</code>，二次项的结论不变。Mamba-2 只需一条，就接近 <code>T(T+h)</code> 本身。</p>
+  </div>
+
+  <div class="calc" data-spec-calc>
+    <div class="calc-controls is-two">
+      <div class="calc-slider">
+        <label>T · 投机窗口（draft 数） <output data-spec-echo="T">8</output></label>
+        <input type="range" data-spec-var="T" min="1" max="24" step="1" value="8">
+      </div>
+      <div class="calc-slider">
+        <label>h · 缓存 token 数 <output data-spec-echo="h">32</output></label>
+        <input type="range" data-spec-var="h" min="8" max="128" step="4" value="32">
+      </div>
+    </div>
+    <div class="calc-out">
+      <p class="calc-verdict ok" data-spec-verdict></p>
+      <table class="ledger">
+        <caption>一轮投机验证的内积账</caption>
+        <thead><tr><th>项</th><th>个数</th></tr></thead>
+        <tbody>
+          <tr><th>R 的窗口部分 <span class="note">T·h</span></th><td data-spec-out="r-window">256</td></tr>
+          <tr><th>C 的 draft 间部分 <span class="note">T(T−1)/2</span></th><td data-spec-out="c-draft">28</td></tr>
+          <tr><th>y 的窗口部分 <span class="note">T·h</span></th><td data-spec-out="y-window">256</td></tr>
+          <tr><th>y 的 draft 间部分 <span class="note">T(T+1)/2</span></th><td data-spec-out="y-draft">36</td></tr>
+          <tr><th>合计</th><td data-spec-out="total">576</td></tr>
+          <tr><th>其中二次项 T² <span class="note">占比</span></th><td class="cost"><span data-spec-out="quadratic">64</span> <span class="note">(<span data-spec-out="quadratic-share">11%</span>)</span></td></tr>
+          <tr><th>每 token 内积</th><td data-spec-out="per-token">72.0</td></tr>
+          <tr><th>单步 decode 的内积 <span class="note">2h</span></th><td data-spec-out="step-baseline">64</td></tr>
+          <tr><th>每 token 开销</th><td class="win" data-spec-out="overhead">1.13×</td></tr>
+        </tbody>
+      </table>
+      <p class="calc-foot">把 T 拉大，看二次项占比怎么爆。这正是投机窗口不能无限加长的算法层原因 —— <a href="#next">第 4 课</a>还会给它加上第二个约束。</p>
+    </div>
+  </div>
+</section>
+
+<section id="quiz">
+  <h2>检查</h2>
+  <form class="quiz-form quiz">
+
+    <fieldset class="quiz-question" data-answer="c" data-explanation="R_s = β_s(v_s − w(0→s)(S_h k_s))，只用到 draft 自己的输入和窗口末端状态，不含任何 u。所以全部 T 个 R 可以一次并行算完。">
+      <legend>1. <code>R<sub>s</sub></code> 的定义特征是什么？</legend>
+      <label class="option"><input type="radio" name="q1" value="a">它只依赖前一个位置的伪值</label>
+      <label class="option"><input type="radio" name="q1" value="b">它只依赖下三角矩阵的元素</label>
+      <label class="option"><input type="radio" name="q1" value="c">它完全不依赖任何一个伪值</label>
+      <label class="option"><input type="radio" name="q1" value="d">它只依赖检查点而非窗口内</label>
+    </fieldset>
+
+    <fieldset class="quiz-question" data-answer="d" data-explanation="C[s,s'] = β_s·w(s'→s)·(k_s'ᵀk_s)，正比于两个 draft 的 key 内积。key 正交则耦合为零，T 个 u 完全独立 —— 已数值验证 C 最大元 6e-17。">
+      <legend>2. 两个 draft 之间的耦合强度，正比于什么？</legend>
+      <label class="option"><input type="radio" name="q2" value="a">它们两个位置之间的距离远近</label>
+      <label class="option"><input type="radio" name="q2" value="b">它们两个各自的学习率的乘积</label>
+      <label class="option"><input type="radio" name="q2" value="c">它们两个目标值向量之间夹角</label>
+      <label class="option"><input type="radio" name="q2" value="d">它们两个键向量之间的内积值</label>
+    </fieldset>
+
+    <fieldset class="quiz-question" data-answer="b" data-explanation="I + C 是单位下三角，对角全是 1，行列式恒为 1，永远可逆。所以 T×T 系统在数值上不需要任何担心。">
+      <legend>3. 为什么 <code>I + C</code> 一定可逆？</legend>
+      <label class="option"><input type="radio" name="q3" value="a">因为它的所有元素都严格小于一</label>
+      <label class="option"><input type="radio" name="q3" value="b">因为它单位下三角行列式恒为一</label>
+      <label class="option"><input type="radio" name="q3" value="c">因为它是对称正定的实数矩阵呀</label>
+      <label class="option"><input type="radio" name="q3" value="d">因为它的规模总是远小于状态维</label>
+    </fieldset>
+
+    <fieldset class="quiz-question" data-answer="a" data-explanation="前代法在 T 上仍是串行的。真正的收益是串行的东西从「T 次昂贵的状态读出」压缩成「T×T 小矩阵上的标量代入」，而这个小矩阵还能整个求逆变成一次 GEMM。">
+      <legend>4. 关于三角求解的收益，哪个说法准确？</legend>
+      <label class="option"><input type="radio" name="q4" value="a">串行依赖被压缩而不是被消灭掉</label>
+      <label class="option"><input type="radio" name="q4" value="b">串行依赖被彻底消灭一步都不剩</label>
+      <label class="option"><input type="radio" name="q4" value="c">串行步数不变但每步都便宜一半</label>
+      <label class="option"><input type="radio" name="q4" value="d">串行步数翻倍但总搬运量减一半</label>
+    </fieldset>
+
+    <fieldset class="quiz-question" data-answer="c" data-explanation="二次项来自 draft 之间的两两内积：C 的 T(T−1)/2 加上 y 的 causal mask 的 T(T+1)/2，合起来是 T²。窗口部分只贡献线性的 2Th。">
+      <legend>5. 账本里那个 <code>T²</code> 二次项来自哪一部分？</legend>
+      <label class="option"><input type="radio" name="q5" value="a">每个草稿对缓存窗口的读出次数</label>
+      <label class="option"><input type="radio" name="q5" value="b">每个草稿对检查点状态的读出数</label>
+      <label class="option"><input type="radio" name="q5" value="c">草稿彼此之间的两两键内积次数</label>
+      <label class="option"><input type="radio" name="q5" value="d">草稿被拒绝之后重新计算的次数</label>
+    </fieldset>
+
+    <button type="submit">检查答案</button>
+    <p class="feedback"></p>
+  </form>
+</section>
+
+<section id="retrieval">
+  <h2>检索练习（合上讲义）</h2>
+  <div class="retrieval">
+    <p><strong>第一题 · 最小非平凡情形。</strong>取 <code>T = 2</code>，把 <code>u<sub>1</sub></code> 和 <code>u<sub>2</sub></code> 完整写出来（不要留 <code>Σ</code>）。然后回答：<code>u<sub>1</sub></code> 为什么不需要"求解"？</p>
+
+    <p><strong>第二题 · 一个极限。</strong>如果所有 draft 的 key 两两正交，<code>C</code> 会变成什么？这在算法上意味着什么？反过来，如果 T 个 draft 的 key <strong>完全相同</strong>呢？</p>
+
+    <p><strong>第三题 · 账本。</strong><code>T = 16</code>、<code>h = 32</code> 时，一轮验证的内积总数是多少？二次项占几成？每 token 开销是几倍？（先算，再用上面的算盘核对。）</p>
+
+    <button data-reveal-target="answer-1">显示参考答案</button>
+    <div class="reveal" id="answer-1">
+      <p><strong>1.</strong> <code>C</code> 的第一行是空的，所以：</p>
+      <div class="equation">
+        u<sub>1</sub> = R<sub>1</sub><br>
+        u<sub>2</sub> = R<sub>2</sub> − C[2,1] · u<sub>1</sub> = R<sub>2</sub> − C[2,1] · R<sub>1</sub>
+      </div>
+      <p><code>u<sub>1</sub></code> 不需要求解，是因为它前面没有任何 draft 可以干扰它 —— 它读出的状态就是 <code>S<sub>h</sub></code> 本身，而 <code>S<sub>h</sub></code> 是已知量。<strong>严格下三角的第一行必然为空，这是通用的自检点。</strong></p>
+
+      <p><strong>2.</strong> key 两两正交 ⟹ <code>k<sub>s′</sub><sup>⊤</sup>k<sub>s</sub> = 0</code> ⟹ <code>C = 0</code> ⟹ <code>U = R</code>：T 个伪 value <strong>完全独立</strong>，链根本不存在，一次 GEMM 就全出来了。语义上很自然 —— delta rule 的干扰来自「往同一个 key 方向反复写」，写到互不相干的地方就互不干扰。</p>
+      <p>反过来 key 完全相同（<code>k<sub>s</sub> = k</code> 对所有 s）：<code>C</code> 的每个下三角元素都含同一个 <code>‖k‖²</code>，耦合最强 —— T 个 draft 在抢同一个槽位反复覆盖。这时三角求解<strong>省不掉任何东西</strong>（依赖是真实的），但它仍然把这份真实依赖压缩到了 <code>T×T</code> 的小矩阵里，而不是 T 次全状态读出。<strong>三角求解不是在绕过依赖，是在给依赖找一个便宜的容器。</strong></p>
+
+      <p><strong>3.</strong> <code>2Th + T² = 2·16·32 + 256 = 1024 + 256 = 1280</code>。二次项占 <code>256/1280 = 20%</code>。每 token 内积 <code>1280/16 = 80</code>，单步 decode 是 <code>2h = 64</code>，开销 <code>80/64 = 1.25×</code> —— 也就是 <code>1 + T/(2h) = 1 + 16/64</code>。</p>
+      <p class="small">本课全部断言的数值证据在 <code>code/verify_replayssm_identities.py</code> 第 4 节（7 条，含「key 正交 ⇒ C = 0」）。直接跑：<code>python3 code/verify_replayssm_identities.py</code></p>
+    </div>
+  </div>
+</section>
+
+<section id="source">
+  <h2>去读一手材料</h2>
+  <div class="callout">
+    <span class="label">Primary source</span>
+    <p><a href="https://tridao.me/blog/2026/replayssm/"><strong>ReplaySSM: Cache SSM Inputs, Not State — Tri Dao</strong></a></p>
+    <p>本课对应 <strong>§5 Algorithm</strong> 的投机解码部分与 <strong>§8 Appendix</strong>。读的时候重点核对两件事：博客对 <code>A<sub>s,s′</sub></code>（本课的 <code>C</code>）的写法，以及它给出的复杂度到底算的是一条读出路径还是两条 —— 这决定了 <code>T(T+h)</code> 和本课的 <code>2Th + T²</code> 哪个是原意。</p>
+    <p class="small">配套：<a href="../../linear_attn/lessons/0004-gated-delta-chunk.html">linear_attn 第 4 课（UT transform）</a>是同一个求逆技巧的来处 · <a href="../reference/replayssm-equations.html">公式卡</a> · <a href="https://proceedings.mlr.press/v262/wu24a.html">Snakes and Ladders</a>（对照：每个 draft 存一份 state 快照的旧做法）</p>
+  </div>
+</section>
+
+<section id="next">
+  <h2>下一课：cache / flush 状态机</h2>
+  <p>到这里算法层的三个答案都齐了：带宽（第 1 课）、可回滚与可并行（第 2、3 课）。剩下的全是<strong>簿记</strong> —— 而簿记出错不会让程序崩，只会让它<strong>静默算错</strong>。</p>
+  <p>第 4 课围绕三个不变量：<code>h + 2T &gt; L</code> 为什么是<strong>正确性</strong>判据而不是性能旋钮（判错 ⟹ ring buffer 覆盖掉还需要的输入 ⟹ 无声地算错）；<code>write_pos</code> 每次 forward 只能前进一次（CUDA graph 的要求）；flush 边界必须对齐 radix cache 的 snapshot 边界。顺带把第 1 课用算盘摸出来的那个上界 <code>dn/(d+n)</code> 正式推导一遍，并叠上这一课的 <code>T</code> 带来的第二个约束。</p>
+</section>
+
+</main>
+
+<footer class="lesson-footer">
+  <p><strong>有任何不清楚的地方，直接问我。</strong>分离那一步哪里跳了、<code>a<sub>s</sub></code> 怎么被吸收进 <code>w</code> 的、为什么前代法还算串行，都可以追问。</p>
+  <p>上一课：<a href="./0002-gdn-pseudo-value.html">修一个被破坏的形状</a> · 术语：<a href="../reference/glossary.html">glossary</a> · 公式卡：<a href="../reference/replayssm-equations.html">replayssm-equations</a> · 验证脚本：<code>code/verify_replayssm_identities.py</code></p>
+  <p class="small">第 3 课 / 5 · 下一课：cache / flush 状态机</p>
+</footer>
+
+</div>
+<script src="../assets/quiz.js"></script>
+<script src="../assets/code-highlight.js"></script>
+<script src="../assets/spec-calc.js"></script>
+</body>
+</html>
