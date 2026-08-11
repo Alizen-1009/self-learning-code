@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 1 课 · 一个矩阵，从来不需要存在</title>
+<link rel="stylesheet" href="../assets/course.css">
+<link rel="stylesheet" href="../assets/ledger.css">
+</head>
+<body>
+<div class="course-shell">
+
+<header class="lesson-header">
+  <p class="eyebrow">ReplaySSM · 第 1 课</p>
+  <h1>一个矩阵，<br>从来不需要存在</h1>
+  <p class="deck">decode 的每一步，都在把一个 128×128 的状态矩阵搬进搬出 HBM，只为换回 128 个数字。ReplaySSM 的全部想法压在一行结合律上。这一课只做一件事：把这笔账算清。</p>
+  <div class="lesson-meta">
+    <span class="pill">算法层 · 不写 kernel</span>
+    <span class="pill">约 12 分钟</span>
+    <span class="pill">符号预算 10 个</span>
+  </div>
+</header>
+
+<nav class="lesson-nav">
+  <a href="#objective">收获</a>
+  <a href="#symbols">符号</a>
+  <a href="#balance">收支</a>
+  <a href="#pivot">支点</a>
+  <a href="#store">存什么</a>
+  <a href="#answers">三个答案</a>
+  <a href="#calc">算盘</a>
+  <a href="#quiz">检查</a>
+  <a href="#retrieval">检索</a>
+  <a href="#source">一手材料</a>
+</nav>
+
+<main>
+
+<section id="objective">
+  <div class="objective">
+    <span class="label">本课唯一收获</span>
+    <p>合上讲义能做到两件事：<strong>（一）</strong>说出 decode 单步的收支 —— 搬了多少字节、换回多少字节；<strong>（二）</strong>写出那一行结合律，并解释它为什么让 state 的<strong>写回</strong>整个消失。</p>
+  </div>
+  <div class="aside">
+    <p><strong>这一课刻意不碰的东西：</strong>衰减权重的具体形式（第 3 课）、缓存窗口该取多长的正式推导（第 4 课）、GDN 为什么不能照搬这套（第 2 课）。它们各有专课。这里只建立一个支点。</p>
+  </div>
+</section>
+
+<section id="symbols">
+  <h2>符号：只有这些</h2>
+  <p class="lede">上一版讲义在这一课里塞进了近二十个带上下标的符号，这是它最大的毛病。新规矩：<strong>凡是能写成数字的，一律写成数字；下标只出现在公式框里，正文里不出现。</strong></p>
+
+  <ul class="keystrip">
+    <li><b>d</b> value 维 = 128</li>
+    <li><b>n</b> key 维 = 128</li>
+    <li><b>S</b> 状态矩阵 d×n</li>
+    <li><b>S₀</b> 检查点状态</li>
+    <li><b>k</b> key，长 n</li>
+    <li><b>q</b> query，长 n</li>
+    <li><b>v</b> value，长 d</li>
+    <li><b>a</b> 每步衰减，标量</li>
+    <li><b>w</b> 标量权重</li>
+    <li><b>h</b> 已缓存 token 数</li>
+  </ul>
+
+  <p>全程 fp32、单个 head、<code>d = n = 128</code>。需要完整符号表（含 GDN 与投机解码那一套）时去<a href="../reference/replayssm-equations.html">公式卡</a>，那是它该待的地方。</p>
+</section>
+
+<section id="balance">
+  <h2>先算收支：decode 单步搬了什么</h2>
+
+  <p>你在 <a href="../../linear_attn/lessons/0002-scalar-decay-to-gated-chunk.html">linear_attn 第 2 课</a> 推过这条递推。prefill 时你把序列切 chunk，用 GEMM 把它压成 compute-bound 的矩阵乘。<strong>decode 时序列长度是 1，chunk 没了</strong> —— 麻烦全部来自这里。</p>
+
+  <div class="equation">
+    S ← a · S + (v k<sup>⊤</sup>) &nbsp;&nbsp;&nbsp;&nbsp; y = S q
+    <span class="eq-note">Mamba-2 的状态更新与读出。输入增益已折进 <code>v</code>，少一个符号，不影响任何结论。<a href="https://tridao.me/blog/2026/replayssm/">Tri Dao, ReplaySSM §1</a></span>
+  </div>
+
+  <p>这一行里藏着一笔极其难看的账。把它摊开：</p>
+
+  <div class="budget">
+    <p class="budget-title">Summary route · 每 head 每 step</p>
+    <p class="budget-sub">满刻度 = 128 KiB。fp32，d = n = 128。</p>
+
+    <div class="budget-row">
+      <span>读旧状态 S</span>
+      <span class="bar"><i style="--w:50%"></i></span>
+      <span class="budget-num">64 KiB</span>
+    </div>
+    <div class="budget-row">
+      <span>写新状态 S</span>
+      <span class="bar is-write"><i style="--w:50%"></i></span>
+      <span class="budget-num">64 KiB</span>
+    </div>
+    <div class="budget-row">
+      <span>换回的输出 y</span>
+      <span class="bar is-buffer"><i style="--w:0.4%"></i></span>
+      <span class="budget-num">512 B</span>
+    </div>
+
+    <div class="budget-total">
+      <span>搬运总量 ÷ 有用产出</span>
+      <span class="budget-num">128 KiB ÷ 512 B = 256 : 1</span>
+    </div>
+  </div>
+
+  <p>搬 128 KiB，换回 512 字节。整步的浮点运算量大约是 <code>4dn ≈ 6.6 万</code> 次，除以 13 万字节 —— <strong>算术强度约 0.5 FLOP/byte</strong>，也就是博客说的 1 FLOP/byte 量级。现代 GPU 的算力与带宽之比是几百比一，所以这个 kernel 的时间几乎全部花在搬状态，而不是算它。<a href="https://tridao.me/blog/2026/replayssm/">博客 §2</a> 指出：在混合模型里成为主要瓶颈的反而是 SSM 层，不是 attention 层。</p>
+
+  <div class="aside">
+    <p>顺带记住另外两笔账，第 3、4 课会回来收：<strong>状态更新是有损摘要</strong>，原始输入被扔掉了，所以投机解码被拒时无法回退；<strong>验证 T 个 draft 需要每个位置的中间状态</strong>，只能一个一个算，拿不到 Transformer 那种一次 GEMM 验证全部 draft 的并行度。</p>
+  </div>
+</section>
+
+<section id="pivot">
+  <h2>支点：一行结合律</h2>
+
+  <div class="tldr">
+    <p>整个方法压在这一行上。<strong>这一课如果只记一件事，记它。</strong></p>
+  </div>
+
+  <div class="equation is-hero">
+    (v k<sup>⊤</sup>) q &nbsp;=&nbsp; v (k<sup>⊤</sup> q)
+    <span class="eq-note">左边先造矩阵再读出；右边先把两个向量缩成一个标量，再拿它缩放一个向量。<a href="https://tridao.me/blog/2026/replayssm/">博客 §3</a></span>
+  </div>
+
+  <p>两边完全相等 —— 这是矩阵乘法的结合律，不是近似。但代价差得离谱：</p>
+
+  <div class="routes">
+    <div class="route">
+      <h4>左边：先造矩阵</h4>
+      <div class="route-body">
+        <p><code>v k<sup>⊤</sup></code> 是一个 128×128 的外积，要算 <strong>16,384</strong> 个数并把它们放进内存；然后再拿 <code>q</code> 做一次 mat-vec 把它读出来。</p>
+        <div class="opcount">
+          <b>16,384</b><span>次乘法<br>而且必须物化一个 128×128</span>
+        </div>
+      </div>
+    </div>
+    <div class="route is-new">
+      <h4>右边：先做内积</h4>
+      <div class="route-body">
+        <p><code>k<sup>⊤</sup> q</code> 是长度 128 的内积，得 <strong>一个标量</strong>；再用这个标量缩放长度 128 的 <code>v</code>。<strong>128 + 128</strong> 次乘法。</p>
+        <div class="opcount">
+          <b>256</b><span>次乘法<br>那个 128×128 从未出现</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <p class="lede">64 倍的差距只是表面收益。真正的收益是那句话：<strong>那个 128×128 的矩阵从来不需要存在。</strong></p>
+
+  <p>换个角度想就通了：我们真正想要的东西是 <code>y</code>，一个长度 128 的向量。状态矩阵只是通往它的<strong>中间产物</strong>。而中间产物 —— 只要能绕过去 —— 是可以不存在的。</p>
+</section>
+
+<section id="store">
+  <h2>于是「内存里留什么」变了</h2>
+
+  <p>递推有两种等价读法。区别不在数学，只在<strong>你把什么留在内存里</strong>。</p>
+
+  <div class="routes">
+    <div class="route">
+      <h4>Summary route · 留摘要</h4>
+      <div class="route-body">
+        <p>每步立刻把新输入吸收进状态，然后<strong>扔掉输入</strong>。状态是唯一的真相来源，所以每步都得把整个 128×128 读进来、写回去。</p>
+        <p class="small">这就是标准 SSM decode 的做法，也是上面那笔 256:1 的账。</p>
+      </div>
+    </div>
+    <div class="route is-new">
+      <h4>History route · 留输入</h4>
+      <div class="route-body">
+        <p>只保留一个<strong>检查点状态</strong>加上最近 h 个 token 的<strong>原始输入</strong>。需要状态时现场重建 —— 而配上结合律，连"重建"这一步都省了，直接算出 <code>y</code>。</p>
+        <p class="small">这是 ReplaySSM。名字里的 replay 就是这个意思：把最近的输入重放一遍。</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout">
+    <span class="label">这是恒等变换，不是近似</span>
+    <p>最容易误读的一点：<strong>缓存窗口不是截断。</strong>窗口之前的全部历史，精确地、无损地活在检查点状态 <code>S₀</code> 里。这和 sliding-window attention 完全是两回事 —— 后者真的把远处的 token 丢了，前者一个 token 都没丢。两条路线的输出在实数域上逐位相等。</p>
+  </div>
+
+  <p>把结合律代进 history route，状态就被彻底消掉了，只剩下向量运算：</p>
+
+  <div class="equation">
+    y = w<sub>0</sub> (S<sub>0</sub> q) &nbsp;+&nbsp; Σ<sub>j=1..h</sub> w<sub>j</sub> · v<sub>j</sub> · (k<sub>j</sub><sup>⊤</sup> q)
+    <span class="eq-note"><strong>output-only formulation</strong>。<code>w</code> 全都是由那串 <code>a</code> 的乘积算出来的<strong>纯标量</strong> —— 具体形式第 3 课再展开，这里不需要。<a href="https://tridao.me/blog/2026/replayssm/">博客 §3</a></span>
+  </div>
+
+  <p>请只看一件事：<strong>右边没有任何 d×n 的矩阵参与运算。</strong><code>S₀ q</code> 是一次 mat-vec，读了 <code>S₀</code> 但没写它；求和号里全是标量乘向量。</p>
+
+  <pre><code class="language-python"># summary route：每步物化并写回整个 state
+S = a * S + torch.outer(v, k)     # 128×128 读 + 128×128 写
+y = S @ q                         # 再读一次刚写完的 state
+
+# history route + 结合律：state 只读检查点，输入进 ring buffer
+buf_k[pos], buf_v[pos] = k, v     # 追加原始输入，不做摘要
+kq = buf_k @ q                    # (h,) 每个 token 一次长度-n 内积
+y  = w0 * (S0 @ q) + (w * kq) @ buf_v   # 外积从未出现
+</code></pre>
+  <p class="citation">伪代码用于对齐公式与数据流，不是官方实现。参考实现见 <a href="https://github.com/Johnny-Liou/ReplaySSM.git">Johnny-Liou/ReplaySSM</a>。</p>
+
+  <div class="budget">
+    <p class="budget-title">ReplaySSM · 每 head 每 step（h = 32）</p>
+    <p class="budget-sub">满刻度仍是 128 KiB，与上一张图直接可比。</p>
+
+    <div class="budget-row">
+      <span>读检查点 S₀</span>
+      <span class="bar"><i style="--w:50%"></i></span>
+      <span class="budget-num">64 KiB</span>
+    </div>
+    <div class="budget-row">
+      <span>写状态</span>
+      <span class="bar is-empty"><i style="--w:100%"></i></span>
+      <span class="budget-num">0</span>
+    </div>
+    <div class="budget-row">
+      <span>读 buffer 的 k、v</span>
+      <span class="bar is-buffer"><i style="--w:25%"></i></span>
+      <span class="budget-num">32 KiB</span>
+    </div>
+
+    <div class="budget-total">
+      <span>搬运总量</span>
+      <span class="budget-num">96 KiB &nbsp;（1.33×）</span>
+    </div>
+  </div>
+
+  <div class="aside">
+    <p><strong>诚实标注：</strong>博客给出的头条数字是 <em>state traffic</em> 从 <code>8dn</code> 降到 <code>4dn</code>，也就是 128 KiB → 64 KiB 的 <strong>2×</strong>。上面这张图多算了一项「读 buffer」—— 那是本课程补的账，博客没把它计入。还有一项没画：buffer 满时要 flush 一次，把写回摊薄成每步 <code>4dn/L</code> 字节。<strong>所以 2× 是上界，实际收益取决于 h。</strong>下面的算盘就是让你亲手把这个取舍摸出来。</p>
+  </div>
+</section>
+
+<section id="answers">
+  <h2>一次改动，三个答案</h2>
+  <p>「不存摘要，存输入」这一个改动，同时回答了 decode 的三个痛点。这一段没有任何公式 —— 但它是整篇博客的立论。</p>
+
+  <ul class="answers">
+    <li><strong>带宽</strong>不再写状态，state traffic 减半。原本花在写回上的那一半带宽直接省掉。</li>
+    <li><strong>回滚</strong>原始输入还在手上。投机解码拒了一个 draft，只需把 ring buffer 的写指针退回去 —— 零快照。<a href="https://proceedings.mlr.press/v262/wu24a.html">既有做法</a>是给每个 draft 存一份完整状态。</li>
+    <li><strong>并行</strong><code>y</code> 只依赖检查点和 buffer，各 draft 位置之间没有串行依赖。逐个推进的循环变成一次 masked GEMM。</li>
+  </ul>
+
+  <div class="callout">
+    <span class="label">那状态什么时候还是要写？</span>
+    <p>buffer 快满时做一次 <strong>flush</strong>：把窗口里的输入汇总进检查点，清空 buffer，写回 HBM。这是唯一发生状态写回的时刻。判据、ring buffer 指针管理、以及它为什么是<strong>正确性不变量</strong>而不是性能旋钮 —— 是<a href="#next">第 4 课</a>的全部内容。这一课不碰。</p>
+  </div>
+</section>
+
+<section id="calc">
+  <h2>算盘：亲手把取舍摸出来</h2>
+  <p>账要能算才算懂。拖动滑块，看三个数字怎么动。<strong>先试着把 h 一路拉大，看什么时候优势归零</strong> —— 那个临界点是第 4 课的入口。</p>
+
+  <div class="calc" data-ledger-calc>
+    <div class="calc-controls">
+      <div class="calc-slider">
+        <label>d · value 维 <output data-calc-echo="d">128</output></label>
+        <input type="range" data-calc-var="d" min="32" max="512" step="32" value="128">
+      </div>
+      <div class="calc-slider">
+        <label>n · key 维 <output data-calc-echo="n">128</output></label>
+        <input type="range" data-calc-var="n" min="32" max="512" step="32" value="128">
+      </div>
+      <div class="calc-slider">
+        <label>h · 缓存 token 数 <output data-calc-echo="h">32</output></label>
+        <input type="range" data-calc-var="h" min="4" max="192" step="4" value="32">
+      </div>
+    </div>
+
+    <div class="calc-out">
+      <p class="calc-verdict ok" data-calc-verdict></p>
+
+      <div class="budget-row">
+        <span>Summary route</span>
+        <span class="bar is-write" data-calc-bar="base-state"><i></i></span>
+        <span class="budget-num" data-calc-out="base-total">128 KiB</span>
+      </div>
+      <div class="budget-row">
+        <span>ReplaySSM 检查点</span>
+        <span class="bar" data-calc-bar="new-state"><i></i></span>
+        <span class="budget-num" data-calc-out="new-state">64 KiB</span>
+      </div>
+      <div class="budget-row">
+        <span>ReplaySSM buffer</span>
+        <span class="bar is-buffer" data-calc-bar="new-buffer"><i></i></span>
+        <span class="budget-num" data-calc-out="new-buffer">32 KiB</span>
+      </div>
+
+      <table class="ledger">
+        <caption>每 head 每 step 的搬运量（fp32）</caption>
+        <thead>
+          <tr><th>项</th><th>Summary route</th><th>ReplaySSM</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th>状态</th>
+            <td><span data-calc-out="base-state">128 KiB</span> <span class="note">读+写</span></td>
+            <td><span data-calc-out="new-state">64 KiB</span> <span class="note">只读</span></td>
+          </tr>
+          <tr>
+            <th>buffer 的 k、v</th>
+            <td data-calc-out="base-buffer">—</td>
+            <td data-calc-out="new-buffer">32 KiB</td>
+          </tr>
+          <tr>
+            <th>合计</th>
+            <td data-calc-out="base-total">128 KiB</td>
+            <td class="win" data-calc-out="new-total">96 KiB</td>
+          </tr>
+          <tr>
+            <th>搬运量之比</th>
+            <td>1.00×</td>
+            <td class="win" data-calc-out="traffic-ratio">1.33×</td>
+          </tr>
+          <tr>
+            <th>一个 token 的状态贡献</th>
+            <td><span data-calc-out="outer-ops">16,384</span> <span class="note">次乘法（外积）</span></td>
+            <td class="win"><span data-calc-out="inner-ops">256</span> <span class="note">次乘法（内积）</span></td>
+          </tr>
+          <tr>
+            <th>乘法次数之比</th>
+            <td>1.00×</td>
+            <td class="win" data-calc-out="flop-ratio">64.00×</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p class="calc-foot">临界窗口长度：<strong data-calc-out="break-even">64</strong> 个 token。未计入 flush 的摊薄写回。「读 buffer」一行是本课程补的账，不在博客的头条数字里。</p>
+    </div>
+  </div>
+
+  <div class="aside">
+    <p>注意最后两行和临界窗口长度<strong>永远是同一个数</strong>。这不是巧合 —— 它们问的是同一个问题：<em>一个 d×n 的矩阵，值多少个长度 d+n 的向量对？</em>这个比值既是省下的乘法倍数，也是缓存窗口的天花板。</p>
+  </div>
+</section>
+
+<section id="quiz">
+  <h2>检查</h2>
+  <form class="quiz-form quiz">
+
+    <fieldset class="quiz-question" data-answer="c" data-explanation="output-only 形式只读检查点、从不写回状态，省掉的正是写的那一半。读检查点那 64 KiB 一分没少。">
+      <legend>1. 状态搬运从 128 KiB 降到 64 KiB，省掉的是哪一半？</legend>
+      <label class="option"><input type="radio" name="q1" value="a">读入旧状态那一半</label>
+      <label class="option"><input type="radio" name="q1" value="b">读出输出向量一半</label>
+      <label class="option"><input type="radio" name="q1" value="c">写回新状态那一半</label>
+      <label class="option"><input type="radio" name="q1" value="d">读入查询向量一半</label>
+    </fieldset>
+
+    <fieldset class="quiz-question" data-answer="b" data-explanation="物化外积要 128×128 = 16,384 次乘法；内积路线是 128（算 k⊤q）+ 128（缩放 v）= 256 次。16,384 ÷ 256 = 64。">
+      <legend>2. 64× 这个比值是怎么来的？</legend>
+      <label class="option"><input type="radio" name="q2" value="a">外积乘法数比读写字节数</label>
+      <label class="option"><input type="radio" name="q2" value="b">外积乘法数比内积乘法数</label>
+      <label class="option"><input type="radio" name="q2" value="c">缓存窗口长度比投机窗口</label>
+      <label class="option"><input type="radio" name="q2" value="d">状态矩阵行数比矩阵列数</label>
+    </fieldset>
+
+    <fieldset class="quiz-question" data-answer="d" data-explanation="窗口不是截断。窗口之前的历史无损地压在检查点状态里，两条路线在实数域上输出逐位相等 —— 这是恒等变换。sliding-window attention 才是真的丢历史。">
+      <legend>3. 缓存窗口之前的那些历史，在 ReplaySSM 里怎么处理？</legend>
+      <label class="option"><input type="radio" name="q3" value="a">按指数衰减近似地丢弃掉</label>
+      <label class="option"><input type="radio" name="q3" value="b">用滑动窗口掩码逐步截断</label>
+      <label class="option"><input type="radio" name="q3" value="c">在每次刷新时重新推导出</label>
+      <label class="option"><input type="radio" name="q3" value="d">精确保留在检查点状态里</label>
+    </fieldset>
+
+    <fieldset class="quiz-question" data-answer="a" data-explanation="output-only 公式里 y 只用到检查点和 buffer 里的原始输入，不需要任何中间状态，所以各 draft 位置互不依赖，可以一次 masked GEMM 算完。">
+      <legend>4. 为什么 output-only 形式能把投机验证变成一次 GEMM？</legend>
+      <label class="option"><input type="radio" name="q4" value="a">输出只依赖检查点与缓存输入</label>
+      <label class="option"><input type="radio" name="q4" value="b">输出只依赖上一步的中间状态</label>
+      <label class="option"><input type="radio" name="q4" value="c">输出只依赖当前位置的衰减值</label>
+      <label class="option"><input type="radio" name="q4" value="d">输出只依赖首个位置的查询值</label>
+    </fieldset>
+
+    <fieldset class="quiz-question" data-answer="c" data-explanation="原始输入没被丢弃，被拒的 draft 只是 buffer 尾部几项，把写指针退回去即可 —— 不需要任何状态快照。这正是「存输入」换来的第二个答案。">
+      <legend>5. 回滚一个被拒的 draft token，需要做什么？</legend>
+      <label class="option"><input type="radio" name="q5" value="a">把保存的状态快照恢复回</label>
+      <label class="option"><input type="radio" name="q5" value="b">把衰减系数逐位置重算过</label>
+      <label class="option"><input type="radio" name="q5" value="c">把环形缓冲的写指针回退</label>
+      <label class="option"><input type="radio" name="q5" value="d">把检查点状态重新汇总过</label>
+    </fieldset>
+
+    <button type="submit">检查答案</button>
+    <p class="feedback"></p>
+  </form>
+</section>
+
+<section id="retrieval">
+  <h2>检索练习</h2>
+  <div class="retrieval">
+    <p><strong>先在纸上算，算完再用算盘对答案。</strong>不要先拖滑块 —— 预测错了才记得住。</p>
+    <p>换一组不对称的配置：<code>d = 128</code>、<code>n = 256</code>、<code>h = 64</code>，fp32，单 head。求三个数：</p>
+    <ol>
+      <li>Summary route 每步搬多少字节？</li>
+      <li>ReplaySSM 每步搬多少字节（含读 buffer）？</li>
+      <li>这组配置下缓存窗口的临界长度是多少？<code>h = 64</code> 在临界点的哪一侧？</li>
+    </ol>
+    <button data-reveal-target="answer-1">显示参考答案</button>
+    <div class="reveal" id="answer-1">
+      <p><strong>1.</strong> 状态是 128×256 = 32,768 个 fp32 = 128 KiB。读加写 = <strong>256 KiB</strong>。</p>
+      <p><strong>2.</strong> 读检查点 128 KiB；buffer 每个 token 存一个长 128 的 <code>v</code> 和一个长 256 的 <code>k</code>，共 384 个数 = 1.5 KiB，64 个 token = <strong>96 KiB</strong>。合计 <strong>224 KiB</strong>，只有 1.14× —— 比对称配置差得多。</p>
+      <p><strong>3.</strong> 临界点是「一个 d×n 矩阵值多少个长度 d+n 的向量对」：<code>128×256 ÷ (128+256) = 32,768 ÷ 384 = 85</code>。<code>h = 64</code> 在临界点<strong>之内</strong>，还在赚，但余量已经不多。</p>
+      <p class="small">留一个悬念给第 4 课：这里算出的 85 只是<strong>带宽</strong>给出的上界。真实的窗口长度还要同时满足投机窗口的余量要求，以及和 radix cache 的快照边界对齐。所以实际取值会明显小于 85 —— SGLang 干脆把它做成了可调参数 <code>--gdn-replayssm-cache-len</code>（<a href="https://github.com/sgl-project/sglang/issues/28511">RFC #28511</a>）。</p>
+    </div>
+  </div>
+</section>
+
+<section id="source">
+  <h2>去读一手材料</h2>
+  <div class="callout">
+    <span class="label">Primary source</span>
+    <p><a href="https://tridao.me/blog/2026/replayssm/"><strong>ReplaySSM: Cache SSM Inputs, Not State — Tri Dao</strong></a></p>
+    <p>本课对应 <strong>§1–§4</strong>。目前<strong>没有对应的 arXiv 论文</strong>，这篇博客就是权威来源。建议顺序：读 §2 三个痛点 → 读 §3 找出那一行结合律 → 读 §4 <em>One change, three answers</em> → 回来重做一次上面的检索练习。</p>
+    <p class="small">延伸：<a href="https://github.com/sgl-project/sglang/issues/28511">SGLang 集成 RFC #28511</a>（生产视角）· <a href="https://github.com/Johnny-Liou/ReplaySSM.git">官方参考实现</a> · <a href="../RESOURCES.md">RESOURCES.md</a></p>
+  </div>
+</section>
+
+<section id="next">
+  <h2>下一课：GDN 为什么不能照搬</h2>
+  <p>这一课的结合律有一个前提：状态更新必须是「标量衰减 + 一个外积」。Mamba-2 正好是这个形状，所以直接缓存 <code>k</code> 和 <code>v</code> 就够了。</p>
+  <p><strong>GDN 不是。</strong>delta rule 在状态的<em>右边</em>乘了一个投影矩阵，展不成「检查点 + 加权和」。ReplaySSM 的修补一句话就能说完：<strong>缓存一个伪 value 而不是 v</strong>，让更新退化回上面那个形状。而那个伪 value 你其实已经见过 —— 它就是你在 <a href="../../linear_attn/lessons/0003-delta-rule-to-wy.html">WY 表示</a>里推过的修正项。</p>
+  <p><a href="./0002-gdn-pseudo-value.html">第 2 课</a>把这条线接上，并算清 GDN 究竟多付了什么代价。答案可能和你猜的不一样：<strong>不是带宽</strong>（GDN 同样从不写回 state），而是窗口内的伪 value 串成了一条依赖链 —— 这条链正是第 3 课要用一次三角求解砍断的东西。</p>
+</section>
+
+</main>
+
+<footer class="lesson-footer">
+  <p><strong>有任何不清楚的地方，直接问我。</strong>我是你这门课的老师 —— 哪一步跳了、shape 对不上、某个数字想看怎么算出来的、或者觉得这一课还是太密，都可以追问。</p>
+  <p>Mission：<a href="../MISSION.md">MISSION.md</a> · 路线图：<a href="../NOTES.md">NOTES.md</a> · 术语：<a href="../reference/glossary.html">glossary</a> · 公式卡：<a href="../reference/replayssm-equations.html">replayssm-equations</a></p>
+  <p class="small">第 1 课 / 5 · 下一课：<a href="./0002-gdn-pseudo-value.html">修一个被破坏的形状</a></p>
+</footer>
+
+</div>
+<script src="../assets/quiz.js"></script>
+<script src="../assets/code-highlight.js"></script>
+<script src="../assets/ledger-calc.js"></script>
+</body>
+</html>
