@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CuTe Layout 读码速查</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  .formula { font-size: 1rem; text-align: center; }
+  .checklist { counter-reset: audit; padding: 0; }
+  .checklist li { list-style: none; margin: .7rem 0; padding-left: 2.2rem; position: relative; }
+  .checklist li::before { counter-increment: audit; content: counter(audit); position: absolute; left: 0; top: .05rem; width: 1.45rem; height: 1.45rem; border-radius: 50%; background: var(--accent); color: #fff; display: grid; place-items: center; font: 700 .72rem var(--font-sans); }
+</style>
+</head>
+<body>
+
+<p class="eyebrow">Reference · CuTe</p>
+<h1>Layout 读码速查</h1>
+<p class="subtitle">把任何 <code>shape:stride</code> 还原成可审查的整数函数。</p>
+
+<pre class="formula"><code>L = (S₀,…,Sₙ):(d₀,…,dₙ)
+L(c₀,…,cₙ) = Σ cᵢdᵢ,    0 ≤ cᵢ &lt; Sᵢ</code></pre>
+
+<div class="warn">
+  <span class="callout-title">语义来自上下文</span>
+  Layout 只描述整数映射。坐标可以表示 tensor 的 <code>(m,n)</code>，也可以表示 <code>(thread,value)</code>；输出可以是 element offset、bit offset 或另一个逻辑坐标。先命名 mode，再做计算。
+</div>
+
+<h2>五步审查法</h2>
+<ol class="checklist">
+  <li><strong>命名 mode：</strong>确认每一维表示 M/N/K、thread/value、stage，还是别的层次。</li>
+  <li><strong>写函数：</strong>把 <code>shape:stride</code> 展开为 <code>L(coord)</code>，不要凭视觉猜 row/column major。</li>
+  <li><strong>测增量：</strong>单独让第 i 个坐标加 1；offset 增量就是该 mode 的 stride。</li>
+  <li><strong>查唯一性：</strong>寻找不同合法坐标是否映射到同一输出。stride 0 不必然 alias；若对应 shape 为 1，只有一个合法坐标。</li>
+  <li><strong>查跨度：</strong>比较逻辑元素数 <code>size</code> 与地址跨度 <code>cosize</code>，识别 padding、空洞与存储预算。</li>
+</ol>
+
+<h2>常见二维模式</h2>
+<table>
+  <tr><th>Layout</th><th>函数</th><th>读法</th></tr>
+  <tr><td><code>(M,N):(N,1)</code></td><td><code>Ni+j</code></td><td>若 mode=(row,col)，则 row-major。</td></tr>
+  <tr><td><code>(M,N):(1,M)</code></td><td><code>i+Mj</code></td><td>若 mode=(row,col)，则 column-major。</td></tr>
+  <tr><td><code>(M,N):(1,L)</code></td><td><code>i+Lj</code></td><td>M mode 连续；当 <code>L&gt;M</code> 时切片间有 padding。</td></tr>
+  <tr><td><code>(M,N):(0,1)</code></td><td><code>j</code></td><td>当 <code>M&gt;1</code> 时沿 mode 0 广播并产生 alias。</td></tr>
+</table>
+
+<h2><code>size</code> 与 <code>cosize</code></h2>
+<p>对本阶段常见的非负 stride：</p>
+<pre><code>size(L)   = ∏ Sᵢ
+cosize(L) = 1 + Σ (Sᵢ - 1)dᵢ</code></pre>
+<p><code>size</code> 是逻辑坐标数；<code>cosize</code> 是覆盖最大输出坐标所需的跨度。它们相等不自动证明映射唯一，不相等也不自动说明错误。</p>
+
+<h2>Agent 审查红旗</h2>
+<ul>
+  <li>没有先说明 mode 语义，就断言“这是 row-major”。</li>
+  <li>看到 padding 就直接断言“没有 shared-memory bank conflict”。</li>
+  <li>看到 stride 0 就直接断言存在 alias，没有检查对应 shape。</li>
+  <li>用 <code>size</code> 分配实际存储，但 Layout 的 <code>cosize</code> 更大。</li>
+  <li>把 Tensor Layout 和 Thread–Value Layout 当成同一种坐标语义。</li>
+</ul>
+
+<div class="note">
+  <span class="callout-title">Primary source</span>
+  <a href="https://github.com/NVIDIA/cutlass/blob/main/media/docs/cpp/cute/01_layout.md">NVIDIA CUTLASS — CuTe Layout</a>；后续代数操作见 <a href="https://github.com/NVIDIA/cutlass/blob/main/media/docs/cpp/cute/02_layout_algebra.md">CuTe Layout Algebra</a>。
+</div>
+
+<div class="lesson-nav">
+  <span><a href="../lessons/0003-cute-layout-as-coordinate-function.html">← 第 3 课</a></span>
+  <span><a href="glossary.html">术语表</a></span>
+</div>
+
+</body>
+</html>

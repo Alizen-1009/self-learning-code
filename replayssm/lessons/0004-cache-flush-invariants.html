@@ -16,8 +16,8 @@
   <p class="deck">前三课的风险是「推错公式」—— 一跑就露馅。这一课的风险完全不同：簿记错了程序不崩、不报错、不出 NaN，只是<strong>安静地算错</strong>。而且错得越轻，越危险。</p>
   <div class="lesson-meta">
     <span class="pill">算法层 · 不写 kernel</span>
-    <span class="pill">约 15 分钟</span>
-    <span class="pill">符号预算 10 个（新增 1 个）</span>
+    <span class="pill">约 18 分钟</span>
+    <span class="pill">符号预算 11 个（新增 2 个）</span>
   </div>
 </header>
 
@@ -27,7 +27,8 @@
   <a href="#fsm">状态机</a>
   <a href="#invariants">三个不变量</a>
   <a href="#rollback">回滚为何精确</a>
-  <a href="#squeeze">L 的两侧</a>
+  <a href="#squeeze">L 的上下界</a>
+  <a href="#ceiling">第三侧</a>
   <a href="#quiz">检查</a>
   <a href="#retrieval">检索</a>
 </nav>
@@ -37,10 +38,10 @@
 <section id="objective">
   <div class="objective">
     <span class="label">本课唯一收获</span>
-    <p>能<strong>凭记忆画出</strong> cache / flush 状态机，说出三个正确性不变量各自「破了会怎样」，并从两侧夹出 <code>L</code> 的取值区间。</p>
+    <p>能<strong>凭记忆画出</strong> cache / flush 状态机，说出三个正确性不变量各自「破了会怎样」，并从<strong>三侧</strong>夹出 <code>L</code> 的取值区间。</p>
   </div>
   <div class="aside">
-    <p><strong>新增符号只有 <code>m</code></strong>（一轮投机中被接受的 draft 数，<code>0 ≤ m ≤ T</code>）。其余全是老面孔：<code>d n S₀ u k h L T w</code>。这一课几乎没有新数学 —— <strong>难点从「推导」换成了「不漏掉一个条件」</strong>。</p>
+    <p><strong>新增符号两个</strong>：<code>m</code>（一轮投机中被接受的 draft 数，<code>0 ≤ m ≤ T</code>）与 <code>P</code>（prefix cache 的块粒度，单位 token —— 只在<a href="#ceiling">第三侧</a>那一节用到）。其余全是老面孔：<code>d n S₀ u k h L T w</code>。这一课几乎没有新数学 —— <strong>难点从「推导」换成了「不漏掉一个条件」</strong>。</p>
   </div>
 </section>
 
@@ -177,7 +178,7 @@
 </section>
 
 <section id="squeeze">
-  <h2><code>L</code> 被两侧夹住</h2>
+  <h2><code>L</code> 的上界与下界</h2>
 
   <p>第 1 课你用算盘摸到过一个临界点：窗口太长时，读 buffer 的字节会吃掉省下的写回。现在把它算完整 —— 加上 flush 的摊薄写回，<code>L</code> 的账有三项：</p>
 
@@ -271,6 +272,74 @@
   </div>
 </section>
 
+<section id="ceiling">
+  <h2>第三侧：块粒度 <code>P</code> 是一个天花板</h2>
+
+  <p>上面那两侧都是 ReplaySSM 自己的账。但只要打开 prefix caching，就冒出第三个约束 —— 而且它来自<a href="#invariants">第三条不变量</a>：检查点必须落在块边界上。</p>
+
+  <p>记 <code>P</code> 为块粒度（一个 block 覆盖多少 token）。检查点位置是<strong>硬的</strong>（必须是 <code>P</code> 的倍数），flush 节奏是<strong>软的</strong>。所以真实实现的做法是<strong>弯折 flush 去迁就边界</strong>，不是反过来：</p>
+
+  <pre><code class="language-python"># vLLM · align 模式，完成一个块的那一步强制 flush
+if align_mode:
+    # Force a flush on the step completing a mamba block so the exact
+    # boundary state is materialized for prefix caching.
+    is_flush = is_flush | ((num_computed + query_lens) % block_size == 0)</code></pre>
+
+  <div class="tldr">
+    <p>方向别搞反：<strong>prefix cache 的命中率不会因为 flush 不对齐而下降。</strong></p>
+    <p>下降的是 flush 的<strong>效率</strong> —— 你被迫比最优节奏更早地写回一次 state。这是一笔带宽账，不是命中率账。</p>
+  </div>
+
+  <h3>有效周期</h3>
+
+  <p>非投机稳态下（<code>T = 1</code>），自然 flush 周期是 <code>L − 1</code> 步。加上边界强制 flush 之后，实际周期变成两者的较小值：</p>
+
+  <div class="equation is-hero">
+    有效周期 = min( L − 1, &nbsp;P )
+    <span class="eq-note">等价说法：<code>L</code> 的<strong>有效值</strong>是 <code>min(L, P+1)</code>。<code>P</code> 太小，你买的 buffer 就用不满。</span>
+  </div>
+
+  <p>整个账本随之塌进这两条式子（脚本逐位验证，偏差 <code>0.00e+00</code>）：</p>
+
+  <div class="equation">
+    flush 率 = 1 / 有效周期 &nbsp;&nbsp;·&nbsp;&nbsp; h̄ = (有效周期 − 1) / 2
+    <span class="eq-note">于是<a href="#squeeze">上一节</a>的三项搬运账不用重写 —— 把 <code>L</code> 换成 <code>min(L, P+1)</code> 就行。</span>
+  </div>
+
+  <table class="ledger">
+    <caption>块粒度如何吃掉收益（<code>d = n = 128</code>，<code>L = 12</code>，非投机稳态）</caption>
+    <thead><tr><th>P</th><th>h̄</th><th>收益</th><th></th></tr></thead>
+    <tbody>
+      <tr><th>3</th><td>1.00</td><td class="cost">1.483×</td><td class="cost">buffer 基本没用上</td></tr>
+      <tr><th>4</th><td>1.50</td><td class="cost">1.571×</td><td class="cost">明显让利</td></tr>
+      <tr><th>8</th><td>3.50</td><td>1.695×</td><td class="note">开始接近</td></tr>
+      <tr><th>16</th><td>4.06</td><td>1.683×</td><td class="note">不整除的小坑</td></tr>
+      <tr><th>64</th><td>4.86</td><td class="win">1.710×</td><td class="note">天花板已无感</td></tr>
+      <tr><th>2496</th><td>5.00</td><td class="win">1.711×</td><td class="win">与无天花板相同</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout">
+    <span class="label">整除 ⇒ 代价为零</span>
+    <p>当 <code>P</code> 是有效周期的整数倍时，<strong>强制 flush 恰好落在一次自然 flush 上</strong>，那一位是冗余的，账本一分钱不花（表里 <code>P=2496</code> 与无天花板同值，就是这个道理的渐近版）。</p>
+    <p>这正是上游 <code>use_replayssm</code> 那句 docstring 的确切含义 —— <em>“In align mode flushes are most efficient when mamba_block_size is a multiple of replayssm_buffer_len, <strong>but this is not required</strong>.”</em> <strong>“most efficient” 是一个数学上的重合，不是经验之谈；而 “not required” 是因为不重合时也只损失效率、不损失正确性。</strong></p>
+  </div>
+
+  <div class="aside">
+    <p><strong>诚实地说：这一侧是松的。</strong>表里 <code>P ≥ 64</code> 就已经和没有天花板没区别了，而现实中的 <code>P</code> 在几百量级。原因有结构性：<code>P</code> 是从 mamba page 大小反推出来的，而 page 被 <code>4dn</code>（检查点本身）主导 —— <strong><code>P</code> 和 <code>L*</code> 是同一个 <code>dn</code> 生出来的两个量，前者落在几百，后者只有 11。</strong>天花板比最优值高一个数量级，所以几乎不 binding。</p>
+    <p>把它写进来不是因为它会咬人，而是因为<strong>不知道它存在的人会把因果搞反</strong>，去调块大小以求提高命中率。</p>
+  </div>
+
+  <div class="callout">
+    <span class="label">真正的陷阱：<code>L</code> 与 <code>P</code> 的自反馈</span>
+    <p><code>L</code> 决定 ring 占多少字节 → 决定 mamba page 大小 → 反推出块粒度 <code>P</code>。所以<strong>改 <code>L</code> 会让块边界的位置整体挪动</strong>。</p>
+    <p>生产中实测过一次：把 buffer 长度从 16 改成 4，派生出的 mamba block 从 2496 变成 2240，<strong>于是「第几个生成 token 会跨越边界」也跟着变了</strong>。当时正在做的对照实验因此失去了受控性 —— 以为在隔离 buffer 长度，其实同时动了边界位置。</p>
+    <p class="small">⚠️ 这条来自生产环境的调试记录，不是博客内容。教训是通用的：<strong>当两个旋钮在实现里耦合时，扫描其中一个不是受控实验。</strong>要隔离就必须把几何钉死（直接指定块大小），而不是指望派生值不变。</p>
+  </div>
+
+  <p class="citation">本节四条断言在 <code>code/verify_replayssm_identities.py</code> 第 5 节：两条恒等式（精确档偏差 <code>0.00e+00</code>）、一条不整除时的渐近断言（<code>P=2496</code> 时 h̄ 偏 <code>2e-3</code>，量级 <code>O(周期/P)</code>）、一条「<code>P ≫ L</code> 收益回到无天花板值」。</p>
+</section>
+
 <section id="quiz">
   <h2>检查</h2>
   <form class="quiz-form quiz">
@@ -307,12 +376,20 @@
       <label class="option"><input type="radio" name="q4" value="d">被拒项的衰减权重恰好等于零</label>
     </fieldset>
 
-    <fieldset class="quiz-question" data-answer="c" data-explanation="下界来自投机窗口（L ≥ 3T buffer 才非空），上界来自读 buffer 的字节成本（最优 L* = sqrt(2dn/(d+n)) ≈ 11）。T ≥ 8 时下界越过最优值，收益开始让利。">
-      <legend>5. <code>L</code> 的取值被哪两件事夹住？</legend>
+    <fieldset class="quiz-question" data-answer="c" data-explanation="下界来自投机窗口（L ≥ 3T buffer 才非空），上界来自读 buffer 的字节成本（最优 L* = sqrt(2dn/(d+n)) ≈ 11），第三侧是 prefix cache 的块粒度 P 给出的天花板（有效周期 = min(L−1, P)）。T ≥ 8 时下界越过最优值，收益开始让利。">
+      <legend>5. <code>L</code> 的上界与下界分别来自哪两件事？</legend>
       <label class="option"><input type="radio" name="q5" value="a">显存总量在下与模型层数在上</label>
       <label class="option"><input type="radio" name="q5" value="b">状态维度在下与序列长度在上</label>
       <label class="option"><input type="radio" name="q5" value="c">投机窗口在下与缓存读取在上</label>
       <label class="option"><input type="radio" name="q5" value="d">刷新频率在下与快照边界在上</label>
+    </fieldset>
+
+    <fieldset class="quiz-question" data-answer="b" data-explanation="检查点位置是硬的、flush 节奏是软的：实现会在完成块的那一步强制 flush，所以命中率不受影响，代价是比最优节奏更早写回一次 state。P 是有效周期的整数倍时强制 flush 与自然 flush 重合，代价归零。">
+      <legend>6. 块粒度 <code>P</code> 很小的时候，损失的是什么？</legend>
+      <label class="option"><input type="radio" name="q6" value="a">前缀缓存的命中长度被截短</label>
+      <label class="option"><input type="radio" name="q6" value="b">刷新过于频繁而浪费带宽</label>
+      <label class="option"><input type="radio" name="q6" value="c">投机窗口被迫缩小到一个块</label>
+      <label class="option"><input type="radio" name="q6" value="d">检查点精度随块变小而下降</label>
     </fieldset>
 
     <button type="submit">检查答案</button>
@@ -327,7 +404,7 @@
 
     <p><strong>第二题 · 反推后果。</strong>对每条不变量，说出「破了会怎样」。哪一条最难定位？为什么？</p>
 
-    <p><strong>第三题 · 定 L。</strong><code>d = n = 256</code>、<code>T = 8</code>。求：(a) 带宽最优 <code>L*</code>；(b) 投机给出的下界；(c) 两者冲突吗？（先算，再用算盘核对。）</p>
+    <p><strong>第三题 · 定 L。</strong><code>d = n = 256</code>、<code>T = 8</code>。求：(a) 带宽最优 <code>L*</code>；(b) 投机给出的下界；(c) 两者冲突吗？(d) 若块粒度 <code>P = 16</code>，天花板会生效吗？（先算，再用算盘核对。）</p>
 
     <button data-reveal-target="answer-1">显示参考答案</button>
     <div class="reveal" id="answer-1">
@@ -337,8 +414,9 @@
       <p><strong>最难定位的是第三条</strong>：前两条至少在单条请求内可复现，第三条要同时满足「某请求恰好在错误边界做了快照」+「另一请求恰好复用了它」，是并发相关的、不确定复现的污染。第二条次难，因为它有个极具误导性的特征 —— 关掉 CUDA graph 症状就消失，很容易被误判成「graph 的 bug」。</p>
 
       <p><strong>3.</strong> (a) <code>L* = √(2·256·256/512) = √256 = 16</code>。(b) 下界 <code>3T = 24</code>（<code>2T = 16</code> 是完全不可用的硬底）。(c) <strong>冲突</strong>：24 &gt; 16，投机窗口把你推离带宽最优点。</p>
+      <p>(d) <strong>会生效。</strong>被下界顶到 <code>L = 24</code> 之后自然周期是 23，而 <code>min(23, 16) = 16</code> —— 天花板压过了自然周期，你付了 <code>L = 24</code> 的显存却只跑出 16 的周期。<strong>但这是构造出来的：</strong><code>P</code> 由 mamba page 反推，<code>d = n = 256</code> 时 page 更大、<code>P</code> 也更大，现实中不会落在 16。三侧里唯一会真咬人的仍然是投机下界。</p>
       <p class="small">注意 <code>d = n = 256</code> 时 <code>L*</code> 从 11 涨到 16 —— 状态越大，能负担的窗口越长（因为省下的那次写回 <code>4dn</code> 也更大）。所以 <code>L</code> 不是一个常数，必须跟着 <code>d</code>、<code>n</code>、<code>T</code> 一起调。这正是 SGLang 把它做成命令行参数 <code>--gdn-replayssm-cache-len</code> 而不是硬编码的原因。</p>
-      <p class="small">本课全部断言的数值证据在 <code>code/verify_replayssm_identities.py</code> 第 5 节（4 条，含一条「必须失败」）。</p>
+      <p class="small">本课全部断言的数值证据在 <code>code/verify_replayssm_identities.py</code> 第 5 节（8 条，含一条「必须失败」；后 4 条是块粒度天花板）。</p>
     </div>
   </div>
 </section>

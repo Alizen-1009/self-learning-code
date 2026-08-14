@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(*)",
+      "Bash(ls ~/.claude/projects/ 2>/dev/null | head -20; find ~/.claude -name \"e1706362*\" 2>/dev/null)",
+      "Bash(ls /Users/alizen/Dev/self-learing/ && ls /Users/alizen/Dev/self-learing/replayssm/reference /Users/alizen/Dev/self-learing/replayssm/learning-records)",
+      "Read(//Users/alizen/Dev/self-learing/**)",
+      "Bash(ls ~/Dev 2>/dev/null; find ~/Dev -maxdepth 3 -type d \\\\\\( -name \"sglang\" -o -name \"vllm\" \\\\\\) 2>/dev/null | head)",
+      "Bash(cd ~/B300_sync/.tmp/pr49887/up && echo \"=== ops 目录 replayssm 相关文件 ===\" && ls vllm/model_executor/layers/mamba/ops/ | grep -i \"replayssm\\\\|selective\" && echo \"\" && echo \"=== 所有 @triton.jit kernel ===\" && grep -rn \"@triton.jit\" vllm/model_executor/layers/mamba/ops/selective_state_update_replayssm_spec.py)"
+    ]
+  }
+}

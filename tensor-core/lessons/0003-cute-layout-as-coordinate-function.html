@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 3 课 · CuTe Layout 是坐标函数</title>
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="../assets/layout-explorer.css">
+<style>
+  .mapping { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: .8rem; margin: 1.2rem 0; }
+  .mapping div { border-top: 3px solid var(--accent-2); background: var(--code-bg); padding: .8rem; text-align: center; }
+  .mapping .arrow { border: 0; background: none; padding: 0; font-family: var(--font-mono); color: var(--accent); }
+  .audit td:first-child { width: 8rem; font-family: var(--font-mono); color: var(--accent); }
+  @media (max-width: 620px) { .mapping { grid-template-columns: 1fr; } .mapping .arrow { transform: rotate(90deg); } }
+</style>
+</head>
+<body>
+
+<p class="eyebrow">Lesson 03 · GEMM + CuTe <span class="tag hopper">CuTe DSL</span></p>
+<h1>Layout 是一个坐标函数</h1>
+<p class="subtitle">看到 <code>shape:stride</code>，先手算映射，再谈 tiling、Copy Atom 和 MMA Atom。</p>
+
+<div class="note">
+  <span class="callout-title">这节课的唯一目标 (tangible win)</span>
+  给定一个 CuTe Layout，例如 <code>(128,8):(1,132)</code>，你能写出它的坐标函数，判断哪个 mode 连续、是否存在 padding 或地址别名，并审查 Agent 对它的口头解释。
+</div>
+
+<h2>0. 从第二课取回一个旧知识</h2>
+<p>第二课中，你已经手写过一种 Layout，只是当时没有这个名字：</p>
+<pre><code>g = lane_id / 4;  t = lane_id % 4;
+(lane_id, value_id)  ──→  C/D 的 (m,n) 坐标</code></pre>
+<p><code>mma.sync</code> fragment 规定了“线程—寄存器槽 → 矩阵坐标”的映射；C 写回公式又把矩阵坐标映射到线性地址。CuTe 用同一种语言——<strong>Layout</strong>——统一描述这些映射。</p>
+
+<div class="mapping" aria-label="Layout 映射">
+  <div>逻辑坐标<br><code>(i,j)</code></div>
+  <div class="arrow">Layout →</div>
+  <div>整数坐标<br><code>offset</code></div>
+</div>
+
+<div class="warn">
+  <span class="callout-title">先拆掉一个常见误解</span>
+  Layout 本身不知道 global/shared/register，也不知道“行”和“列”。它只是整数函数。输入输出的语义和单位由上下文决定：可以是 tensor 坐标 → element offset，也可以是 <code>(thread,value)</code> → fragment 坐标。<sup class="ref">[1]</sup>
+</div>
+
+<h2>1. 读懂 <code>shape:stride</code></h2>
+<p>二维 Layout 记作：</p>
+<pre><code>L = (S₀,S₁):(d₀,d₁)
+L(i,j) = i × d₀ + j × d₁       0 ≤ i &lt; S₀, 0 ≤ j &lt; S₁</code></pre>
+<p><code>S₀/S₁</code> 给出坐标域，每一维在 CuTe 中称为一个 <strong>mode</strong>；<code>d₀/d₁</code> 表示对应坐标增加 1 时，输出整数增加多少。不要看到两个 mode 就自动命名为 row/column——先从 tensor 语义确认。</p>
+
+<table>
+  <tr><th>Layout</th><th>坐标函数</th><th>结论</th></tr>
+  <tr><td><code>(4,3):(3,1)</code></td><td><code>L(i,j)=3i+j</code></td><td>mode 1 连续；若 <code>(i,j)=(row,col)</code>，这是 row-major。</td></tr>
+  <tr><td><code>(4,3):(1,4)</code></td><td><code>L(i,j)=i+4j</code></td><td>mode 0 连续；若语义同上，这是 column-major。</td></tr>
+  <tr><td><code>(4,3):(1,8)</code></td><td><code>L(i,j)=i+8j</code></td><td>mode 0 连续；相邻 mode-1 切片之间有 4 个空洞。</td></tr>
+  <tr><td><code>(4,3):(0,1)</code></td><td><code>L(i,j)=j</code></td><td>mode 0 被广播；不同 <code>i</code> 会映射到同一位置。</td></tr>
+</table>
+
+<p>这里有两个不同的量：</p>
+<ul>
+  <li><code>size(L)</code>：逻辑坐标个数，二维平坦 shape 下是 <code>S₀×S₁</code>。</li>
+  <li><code>cosize(L)</code>：覆盖该 Layout 输出所需的地址跨度；对本课的非负 stride，可算作 <code>max L(i,j)+1</code>。有 padding 时它可能大于 size。<sup class="ref">[1]</sup></li>
+</ul>
+
+<h2>2. 用探针建立直觉</h2>
+<p>先选一个 preset，再点任意逻辑坐标。红线表示至少两个逻辑坐标映射到了同一 offset；这对只读广播可能有意，对并行写入通常意味着冲突或数据竞争。</p>
+
+<div class="layout-explorer" data-layout-explorer>
+  <div class="layout-presets">
+    <button type="button" data-layout-preset data-shape="4,3" data-stride="3,1">mode 1 连续</button>
+    <button type="button" data-layout-preset data-shape="4,3" data-stride="1,4">mode 0 连续</button>
+    <button type="button" data-layout-preset data-shape="4,3" data-stride="1,8">带 padding</button>
+    <button type="button" data-layout-preset data-shape="4,3" data-stride="0,1">广播 / alias</button>
+  </div>
+  <div class="layout-inputs">
+    <label>Shape S₀<input data-layout-field="m" type="number" min="1" max="12" value="4"></label>
+    <label>Shape S₁<input data-layout-field="n" type="number" min="1" max="12" value="3"></label>
+    <label>Stride d₀<input data-layout-field="sm" type="number" min="0" max="128" value="3"></label>
+    <label>Stride d₁<input data-layout-field="sn" type="number" min="0" max="128" value="1"></label>
+  </div>
+  <div class="layout-equation" data-layout-equation></div>
+  <div class="layout-grid" data-layout-grid aria-label="逻辑坐标到 offset 的映射"></div>
+  <p class="layout-analysis" data-layout-analysis></p>
+</div>
+
+<div class="win">
+  <span class="callout-title">审查 Layout 的最小算法</span>
+  ① 给每个 mode 命名；② 写出 <code>L(coord)</code>；③ 分别让每个坐标加 1，看 offset 增量；④ 查 alias；⑤ 比较 size 与 cosize，找 padding。不要只凭“看起来像 row-major”下结论。
+</div>
+
+<h2>3. 审查真实 CuTe DSL 代码</h2>
+<p>打开 <a href="../repos/LeetCUDA/kernels/cutlass/cute_dsl/sgemm/mma_atom.py"><code>mma_atom.py</code></a>，找到：</p>
+<pre><code>smem_layout_a = cute.make_layout(
+    shape=(tile_m, tile_k),
+    stride=(1, tile_m + 4)
+)
+<span class="cmt"># tile_m=128, tile_k=8 → (128,8):(1,132)</span></code></pre>
+
+<table class="audit">
+  <tr><th>审查问题</th><th>推导</th></tr>
+  <tr><td>坐标函数</td><td><code>L(m,k)=m+132k</code>。</td></tr>
+  <tr><td>连续 mode</td><td><code>m</code> 增加 1，offset 增加 1；所以 M mode 连续。</td></tr>
+  <tr><td>padding</td><td>一个 K 切片有 128 个有效元素，下一个切片从 offset 132 开始，中间留下 4 个元素。</td></tr>
+  <tr><td>size</td><td><code>128×8=1024</code> 个逻辑元素。</td></tr>
+  <tr><td>cosize</td><td>最大 offset 是 <code>127+132×7=1051</code>，所以地址跨度为 <code>1052</code> 个元素。</td></tr>
+</table>
+
+<p>这 4 个 padding 元素不是“自动消除 bank conflict”的证明。它只改变了跨 K 切片的地址关系；是否无 bank conflict，仍需结合实际 warp 访问坐标与 bank 映射验证。</p>
+
+<div class="quiz" data-answer="2">
+  <p class="q">即时回忆 1：对 <code>(4,3):(3,1)</code>，坐标 <code>(2,1)</code> 映射到哪个 offset？</p>
+  <div class="opts">
+    <button class="opt"><code>2×1 + 1×4 = 6</code></button>
+    <button class="opt"><code>2×4 + 1×1 = 9</code></button>
+    <button class="opt"><code>2×3 + 1×1 = 7</code></button>
+    <button class="opt"><code>2×1 + 1×3 = 5</code></button>
+  </div>
+  <div class="fb">直接代入 <code>L(i,j)=3i+j</code>，得到 <code>L(2,1)=7</code>。</div>
+</div>
+
+<div class="quiz" data-answer="0">
+  <p class="q">即时回忆 2：Layout <code>(4,3):(0,1)</code> 最需要警惕什么？</p>
+  <div class="opts">
+    <button class="opt">不同第一维坐标会发生地址别名</button>
+    <button class="opt">不同第二维坐标会发生地址别名</button>
+    <button class="opt">所有逻辑坐标都保持地址唯一</button>
+    <button class="opt">所有物理地址都保持完全连续</button>
+  </div>
+  <div class="fb"><code>L(i,j)=j</code> 与 <code>i</code> 无关，因此不同的第一维坐标会落到同一 offset。</div>
+</div>
+
+<h2>4. 15 分钟练习</h2>
+<ol>
+  <li>不运行代码，手算 <code>(128,8):(1,132)</code> 的 <code>L(13,2)</code>、<code>L(127,0)</code>、<code>L(0,1)</code>。</li>
+  <li>解释为什么 <code>L(127,0)</code> 与 <code>L(0,1)</code> 之间差 5，而 padding 仍称为 4 个元素。</li>
+  <li>在 <code>mma_atom.py</code> 找到 <code>mma_atoms_layout</code>。先给三个 mode 命名，再判断 stride 0 的 mode 是“广播”还是仅仅因为 shape 为 1 而退化；不要把两者混为一谈。</li>
+</ol>
+
+<div class="note">
+  <span class="callout-title">主源（本课后读 01，暂不硬啃 02）</span>
+  NVIDIA CUTLASS 官方 <a href="https://github.com/NVIDIA/cutlass/blob/main/media/docs/cpp/cute/01_layout.md">CuTe 01 — Layout</a> 是本课主源。下一课做 composition/coalesce/divide/product 时，再读 <a href="https://github.com/NVIDIA/cutlass/blob/main/media/docs/cpp/cute/02_layout_algebra.md">CuTe 02 — Layout Algebra</a>。CuTe DSL 与 C++ 在这些核心概念上保持一致。<sup class="ref">[1][2]</sup>
+</div>
+
+<div class="ask-teacher">
+  <span class="callout-title">随时追问</span>
+  把三个练习答案发给我，尤其是第 3 题对 stride 0 的判断。我会根据你的推理决定下一课直接进入 Layout composition，还是先补一节 hierarchical shape。
+</div>
+
+<p class="cite">[1] NVIDIA CUTLASS, “CuTe Layout.”　[2] NVIDIA CUTLASS, “CuTe Layout Algebra.”</p>
+
+<div class="lesson-nav">
+  <span><a href="0002-ldmatrix-to-mma-fragments.html">← 第 2 课</a></span>
+  <span><a href="../reference/cute-layout-reading.html">Layout 速查</a></span>
+  <span><a href="../reference/glossary.html">术语表</a></span>
+</div>
+
+<script src="../assets/quiz.js"></script>
+<script src="../assets/layout-explorer.js"></script>
+</body>
+</html>

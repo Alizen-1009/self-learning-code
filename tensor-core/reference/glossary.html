@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>术语表 · Tensor Core / CUTLASS / MoE</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  .glossary dt { font-family: var(--font-sans); font-weight: 700; margin-top: 1.3rem; font-size: 1rem; }
+  .glossary dd { margin: .25rem 0 0; color: var(--ink-soft); }
+  .glossary dd .ptx { font-family: var(--font-mono); font-size: .82em; color: var(--accent); }
+  .arch-key { font-family: var(--font-sans); font-size: .8rem; margin: 1rem 0 2rem; }
+</style>
+</head>
+<body>
+
+<p class="eyebrow">Reference · 常读常新</p>
+<h1>术语表</h1>
+<p class="subtitle">Tensor Core、CUTLASS/CuTe、Hopper/Blackwell、MoE 的规范词汇。每节课都遵循这里的定义。</p>
+
+<div class="arch-key">
+  架构标签：
+  <span class="tag ada">ADA / sm_89（指令代际地基）</span>
+  <span class="tag hopper">HOPPER / sm_90 · H20</span>
+  <span class="tag blackwell">BLACKWELL / sm_100 · B200 / B300</span>
+</div>
+
+<h2>一、Tensor Core 指令</h2>
+<dl class="glossary">
+  <dt id="fragment">Fragment（寄存器片段）</dt>
+  <dd>一个逻辑矩阵 tile 按硬件规定分散到 warp 各 lane 寄存器后的局部份额。它不是连续内存，也通常不是完整一行/列；审查 MMA 代码时必须区分“逻辑矩阵坐标”和“本 lane 的寄存器编号”。<span class="cite">[PTX ISA: Matrix Fragments]</span></dd>
+
+  <dt id="ldmatrix"><code>ldmatrix</code></dt>
+  <dd>warp 集体从 shared memory 装入一个或多个小矩阵 fragment 的 PTX 指令。<code>.x1/.x2/.x4</code> 分别需要 8/16/32 个行首地址；<code>.trans</code> 改变装入寄存器的片段组织以匹配转置布局。<span class="cite">[PTX ISA: ldmatrix]</span></dd>
+
+  <dt id="address-provider">Address Provider（行地址提供者）</dt>
+  <dd>在 <code>ldmatrix</code> 中，其地址操作数实际被用于指定矩阵行首的 lane。整 warp 都执行指令，但不代表每个 lane 的地址都被消费；必须按 <code>.x1/.x2/.x4</code> 区分。</dd>
+
+  <dt>Tensor Core</dt>
+  <dd>SM 内专用硬件单元，一条指令完成小矩阵的乘累加 <code>D = A·B + C</code>。关键点：它是 <strong>warp（乃至 warpgroup）协作</strong>的，不是单线程指令——操作数分布在多个线程的寄存器里。<span class="cite">[NVIDIA CUDA C++ Guide]</span></dd>
+
+  <dt>MMA / <span class="ptx">mma.sync</span> <span class="tag ada">ADA</span></dt>
+  <dd>Warp 级同步 MMA 的 PTX 指令。一个 warp 的 32 线程共同完成一块 <code>m16n8k16</code>（fp16 常见）的乘累加，A/B/C/D 的 fragment 按固定规则分散在 32 线程寄存器中。是理解一切上层 tensor core 的地基。<span class="cite">[PTX ISA]</span></dd>
+
+  <dt>WMMA (<span class="ptx">nvcuda::wmma</span>)</dt>
+  <dd>CUDA C++ 层对 mma 的高级封装（16×16×16），用起来简单但控制力弱、性能上限低于手写 <code>mma.sync</code>。多用于教学与入门。</dd>
+
+  <dt>WGMMA / <span class="ptx">wgmma.mma_async</span> <span class="tag hopper">HOPPER</span></dt>
+  <dd>Warpgroup 级<strong>异步</strong> MMA。由一个 warpgroup（4 warps = 128 线程）发起，操作数可直接来自 shared memory，累加器在寄存器中；配合 fence/mbarrier 实现计算与访存重叠。Hopper 高性能 GEMM 的核心。<span class="cite">[cutlass/wgmma 笔记 · Colfax]</span></dd>
+
+  <dt>TMMA / <span class="ptx">tcgen05.mma</span> <span class="tag blackwell">BLACKWELL</span></dt>
+  <dd>你说的"TMMA"对应 Blackwell 第五代 tensor core 的 <code>tcgen05</code> 指令族（"TMMA" 是非正式叫法）。累加器放在新的 <strong>Tensor Memory (TMEM)</strong>，支持 <strong>CTA-pair（跨 2 个 SM）</strong>的 MMA，原生支持 FP8/FP4 block-scaled。<span class="cite">[PTX ISA · CUTLASS Blackwell 示例]</span></dd>
+
+  <dt>Warpgroup <span class="tag hopper">HOPPER</span></dt>
+  <dd>连续 4 个 warp（128 线程），是 <code>wgmma</code> 操作的基本单位。</dd>
+</dl>
+
+<h2>二、内存与数据搬运</h2>
+<dl class="glossary">
+  <dt>内存层次</dt>
+  <dd>Global (HBM) → L2 → Shared Memory (SMEM) / L1 → Register；Blackwell 另加 <strong>TMEM</strong>（tensor core 专用）。越靠近计算单元越快越小。优化的本质就是把数据尽量留在高层次、复用最大化。</dd>
+
+  <dt id="shared-memory-limits">Shared Memory 资源上限</dt>
+  <dd><code>sharedMemPerBlock</code> 是单 block 的默认上限，<code>sharedMemPerBlockOptin</code> 是显式 opt-in 后的单 block 上限，<code>sharedMemPerMultiprocessor</code> 是一个 SM 上所有驻留 block 共同竞争的总预算。它们共同约束 occupancy。详见 <a href="cuda-device-properties.html">CUDA Device Properties 速查</a>。</dd>
+
+  <dt id="persisting-l2">Persisting L2 Cache</dt>
+  <dd>从设备 L2 中预留一部分容量，给标为 <code>cudaAccessPropertyPersisting</code> 的访问更高保留优先级。它不是锁定或预加载；最大可预留量由 <code>persistingL2CacheMaxSize</code> 给出。<span class="cite">[CUDA C++ Guide: L2 Access Management]</span></dd>
+
+  <dt id="access-policy-window">Access Policy Window</dt>
+  <dd>附着在 CUDA stream 或 graph kernel node 上的连续地址区间，用 <code>hitProp</code>、<code>missProp</code> 和 <code>hitRatio</code> 提示 L2 缓存策略。窗口大小上限是 <code>accessPolicyMaxWindowSize</code>；它描述可标注的地址范围，不是缓存容量。</dd>
+
+  <dt><span class="ptx">cp.async</span> (LDGSTS) <span class="tag ada">AMPERE+</span></dt>
+  <dd>异步拷贝 global→shared，绕过寄存器，让搬运与计算重叠。是 software pipelining 的基础。</dd>
+
+  <dt id="copy-engine">Copy Engine / DMA Engine</dt>
+  <dd>独立于 SM 计算流水线执行数据搬运的硬件引擎；<code>asyncEngineCount</code> 报告其数量。配合 pinned host memory、<code>cudaMemcpyAsync</code> 与可并发 stream，拷贝才可能和 kernel 计算重叠。</dd>
+
+  <dt id="mapped-host-memory">Pinned / Mapped Host Memory</dt>
+  <dd><strong>Pinned</strong> 表示 host 页被锁定，可供 DMA 高效搬运；<strong>mapped</strong> 在此基础上把 host memory 映射进 GPU 地址空间，让 kernel 可以直接 load/store。离散 GPU 上的 mapped 访问通常仍需经过 PCIe/NVLink。</dd>
+
+  <dt>TMA — Tensor Memory Accelerator <span class="tag hopper">HOPPER</span></dt>
+  <dd>专用硬件 DMA 引擎，用多维 tensor descriptor 一条指令（<code>cp.async.bulk.tensor</code>）搬运整块 tile，完成信号写入 mbarrier。大幅降低地址计算与线程开销。<span class="cite">[cutlass/tma 笔记 · Colfax]</span></dd>
+
+  <dt>mbarrier</dt>
+  <dd>Shared memory 中的屏障对象，用于跟踪 TMA / wgmma 等异步操作的完成，是生产者-消费者流水线的同步原语。</dd>
+
+  <dt>Bank conflict</dt>
+  <dd>Shared memory 分 32 个 bank；同一 warp 的线程访问同一 bank 的不同地址会被串行化。避免它是 SMEM 优化的核心。</dd>
+
+  <dt>Swizzle</dt>
+  <dd>对 shared memory 地址做置换（XOR 等），使 tensor core 所需的访问模式恰好避开 bank conflict。CuTe 用 <code>Swizzle&lt;B,M,S&gt;</code> 描述。<span class="cite">[repos/LeetCUDA/kernels/swizzle]</span></dd>
+
+  <dt>TMEM — Tensor Memory <span class="tag blackwell">BLACKWELL</span></dt>
+  <dd>Blackwell 新增的片上内存空间，专门存放 tensor core 累加器，独立于寄存器与 shared memory。<code>tcgen05</code> 直接读写它。</dd>
+</dl>
+
+<h2>三、CUTLASS / CuTe 抽象</h2>
+<dl class="glossary">
+  <dt>CUTLASS</dt>
+  <dd>NVIDIA 开源的高性能 GEMM/卷积模板库。2.x 用 fragment/iterator 风格；3.x 基于 CuTe 重写。Agent 生成的高性能 kernel 常是 CUTLASS 风格。<span class="cite">[github.com/NVIDIA/cutlass]</span></dd>
+
+  <dt>CuTe</dt>
+  <dd>CUTLASS 3.x 的核心 C++ 模板库，用统一的 <strong>Layout 代数</strong>描述数据与线程的排布。看懂 CuTe = 看懂现代 CUTLASS。<span class="cite">[cutlass/cute 笔记]</span></dd>
+
+  <dt id="layout">Layout = (Shape, Stride)</dt>
+  <dd>CuTe 的核心整数函数：对平坦 Layout，<code>L(c₀,…,cₙ)=Σcᵢdᵢ</code>。Shape 给出合法坐标域，Stride 给出各坐标加 1 时输出的增量。它不天然等于“内存布局”；输入输出的语义和单位由 Tensor、MMA 或 Copy 上下文决定。速查见 <a href="cute-layout-reading.html">Layout 读码速查</a>。<span class="cite">[CUTLASS: CuTe Layout]</span></dd>
+
+  <dt id="mode">Mode / Submode</dt>
+  <dd>CuTe 对 Layout 一个维度的称呼；嵌套 Layout 中，mode 内还可以有 submode。读码时应先给每个 mode 标注 M/N/K、thread/value、stage 等语义，不能仅凭位置假定是行或列。</dd>
+
+  <dt id="size-cosize"><code>size</code> / <code>cosize</code></dt>
+  <dd><code>size</code> 是 Layout 逻辑坐标域的元素数；<code>cosize</code> 是覆盖其最大输出坐标所需的跨度。padding 会让 <code>cosize &gt; size</code>；二者相等也不能单独证明映射无地址别名。</dd>
+
+  <dt>Atom / TiledMMA / TiledCopy</dt>
+  <dd><strong>Atom</strong> 封装一条硬件指令（一个 <code>mma.sync</code> 或一个 <code>ldmatrix</code>）；<strong>TiledMMA/TiledCopy</strong> 把 Atom 按线程铺开成一个 tile 的完整操作。这是 CuTe 组织 tensor core 的方式。</dd>
+</dl>
+
+<h2>四、性能与调度</h2>
+<dl class="glossary">
+  <dt id="concurrent-kernels">Concurrent Kernels</dt>
+  <dd>设备同时执行来自不同 stream 的多个 kernel 的能力。<code>concurrentKernels = true</code> 只表示硬件支持；无依赖且仍有 SM、寄存器与共享内存资源时才会真正重叠。</dd>
+
+  <dt>Warp specialization <span class="tag hopper">HOPPER+</span></dt>
+  <dd>把一个 block 的 warp 分成<strong>生产者</strong>（用 TMA 搬数据）和<strong>消费者</strong>（用 wgmma 算），通过 mbarrier 流水衔接。Hopper/Blackwell 高性能 GEMM 的标准结构。</dd>
+
+  <dt>Software pipelining / 多级缓冲</dt>
+  <dd>预取若干 stage 的数据到 SMEM，使第 k 块的计算与第 k+1 块的搬运重叠，隐藏访存延迟。stage 数是关键调参。</dd>
+
+  <dt>Occupancy</dt>
+  <dd>SM 上活跃 warp 数 / 最大可容纳 warp 数。受寄存器数、SMEM 用量限制。高不一定好——tensor core kernel 常靠流水而非高 occupancy 藏延迟。</dd>
+
+  <dt>Roofline / Arithmetic Intensity</dt>
+  <dd>算术强度 = FLOP/Byte。低于 roofline 拐点 → 访存受限；高于 → 计算受限。判断"该优化访存还是算力"的第一工具。<span class="cite">[cuda-mode L8]</span></dd>
+</dl>
+
+<h2>五、MoE 计算侧（主线）</h2>
+<dl class="glossary">
+  <dt>Grouped / Segmented GEMM</dt>
+  <dd>每个 expert 有独立权重、且分到的 token 数不等，于是把多个大小不一的 GEMM 打包成一次 kernel 调用。是 MoE 计算侧的核心。<span class="cite">[cutlass/gemm · llm/moe 笔记]</span></dd>
+
+  <dt>Permute / Unpermute</dt>
+  <dd>按路由结果把 token 重排，使去往同一 expert 的 token 连续（gather），expert GEMM 后再还原（scatter）。</dd>
+
+  <dt>moe_align_block_size</dt>
+  <dd>把每个 expert 的 token 数对齐/padding 到 tile block 大小，让 grouped GEMM 能整块高效执行的辅助 kernel。<span class="cite">[llm/moe/moe_align_block_size 笔记]</span></dd>
+
+  <dt>量化 GEMM (W4A16 / W8A8 / Mixed GEMM)</dt>
+  <dd>权重/激活用低精度（INT4/INT8/FP8）以省带宽与显存，tensor core 做混合精度乘累加。MoE 推理重度使用。<span class="cite">[cutlass/gemm TRT-LLM 笔记]</span></dd>
+
+  <dt>FP8 (E4M3/E5M2) · FP4 / MXFP4 <span class="tag blackwell">BLACKWELL</span></dt>
+  <dd>低精度浮点格式。Blackwell tensor core 原生支持 FP4 及 <strong>block-scaled / microscaling</strong>（每小块一个缩放因子）以保精度。</dd>
+</dl>
+
+<div class="ask-teacher">
+  <span class="callout-title">这是活文档</span>
+  遇到 Agent 说的新词而这里没有？告诉我，我会把它加进术语表并在下一课用到。
+</div>
+
+<div class="lesson-nav">
+  <span><a href="../lessons/0003-cute-layout-as-coordinate-function.html">→ 第 3 课：CuTe Layout 是坐标函数</a></span>
+  <span><a href="../MISSION.md">Mission</a></span>
+</div>
+
+</body>
+</html>

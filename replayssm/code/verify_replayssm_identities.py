@@ -350,6 +350,55 @@ def cache_flush_invariants(rng, d=6, n=5, nstep=60):
                  abs(best - analytic) / analytic, tol=0.15)   # 整数网格 + 平坦极小
     print(f"         └ 上界自检：L=2·dn/(d+n)={2*D*N//(D+N)} 时平均 h≈dn/(d+n)，"
           f"收益退化到 {2*state/avg_traffic(2*D*N//(D+N)):.2f}× —— 与第 1 课的临界点一致。")
+
+    # 第三侧：块粒度 P。prefix caching 要求检查点落在块边界，所以 align 模式在
+    # 「完成一个块」的那一步强制 flush（上游 mamba_attn.py:676-681）。于是 flush
+    # 周期不再只由 L 决定，而是 min(L−1, P)。
+    def sched(L, P, nstep):
+        """非投机（T=1）。返回 (flush 率, 平均 h)。边界 flush 折进当前 token，
+           因为检查点必须精确代表块的最后一个 token。"""
+        h = 0; fl = 0; tot = 0
+        for j in range(nstep):
+            if h + 2 > L:                      # 自然判据
+                h = 0; fl += 1
+            tot += h; h += 1
+            if (j + 1) % P == 0:               # 完成块的那一步
+                h = 0; fl += 1
+        return fl / nstep, tot / nstep
+
+    L0, p0 = 12, 11                            # p0 = L0 − 1 是非投机的自然周期
+    # 恒等式在「P ≤ p0」或「p0 整除 P」时逐位精确。
+    worst_fr = worst_hb = 0.0
+    for P in (3, 4, 8, 11, 22, 33):
+        nstep = max(8 * P, 20000 // P * P)
+        fr, hb = sched(L0, P, nstep)
+        pe = min(p0, P)
+        worst_fr = max(worst_fr, abs(fr - 1 / pe))
+        worst_hb = max(worst_hb, abs(hb - (pe - 1) / 2))
+    ok &= report("块粒度: flush 率 = 1/min(L−1, P)", worst_fr)
+    ok &= report("块粒度: h̄ = (min(L−1, P) − 1)/2", worst_hb)
+
+    # 不整除且 P ≫ p0 时只渐近成立：每块末尾的强制 flush 截断一个周期，
+    # 误差量级 O(p0/P)。P=2496 时 h̄ 偏 2e-3，可忽略但不是恒等。
+    fr, hb = sched(L0, 2496, 8 * 2496)
+    ok &= report("块粒度: P=2496 不整除 ⇒ 只渐近（误差 O(p/P)）",
+                 abs(hb - (p0 - 1) / 2), tol=1e-2)
+
+    def ratio(hbar, frate):                    # 与 avg_traffic 同一账本
+        return 2 * state / (state + B * hbar * (D + N) + state * frate)
+
+    curve = []
+    for P in (3, 4, 8, 16, 64, 2496):
+        nstep = max(8 * P, 20000 // P * P)
+        fr, hb = sched(L0, P, nstep)
+        curve.append((P, hb, ratio(hb, fr)))
+    ceiling_free = ratio((p0 - 1) / 2, 1 / p0)  # 没有天花板时的收益
+    # 结构性松弛：P 落在几百量级而 L* 只有 ~11，所以这一侧几乎不 binding
+    ok &= report(f"块粒度: P≫L 时收益回到无天花板值 {ceiling_free:.3f}×",
+                 abs(curve[-1][2] - ceiling_free) / ceiling_free, tol=2e-3)
+    print("         └ 收益随 P：" +
+          "，".join(f"P={P} → {r:.3f}×(h̄={hb:.2f})" for P, hb, r in curve))
+    print("         └ 只有 P < 8 才真正让利；现实块粒度（≥64）与无天花板无异。")
     return ok
 
 
