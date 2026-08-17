@@ -7,7 +7,7 @@
 | 路径 | 作用 |
 |---|---|
 | [`handle_code/`](./handle_code/) | 过去积累的手写代码，包括算法、C++、CUDA、Python 与量化练习 |
-| [`gpu-kernel-learning/`](./gpu-kernel-learning/) | CUDA / Tensor Core / CUTLASS / MoE kernel 的系统学习工作区 |
+| [`tensor-core/`](./tensor-core/) | CUDA / Tensor Core / CUTLASS / MoE kernel 的系统学习工作区 |
 
 ## 后续主题约定
 
@@ -16,7 +16,7 @@
 ```text
 self-learing/
 ├── handle_code/
-├── gpu-kernel-learning/
+├── tensor-core/
 ├── io-systems-learning/           # 未来
 └── distributed-systems-learning/  # 未来
 ```

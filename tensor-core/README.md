@@ -14,7 +14,7 @@
 
 ```bash
 git clone --recurse-submodules git@github.com:Alizen-1009/cuda-self-learning-code.git
-cd cuda-self-learning-code/gpu-kernel-learning
+cd cuda-self-learning-code/tensor-core
 ```
 
 如果已经克隆过父仓库，再初始化参考仓库：

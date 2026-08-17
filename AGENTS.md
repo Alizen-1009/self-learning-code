@@ -5,7 +5,7 @@
 ## 顶层导航
 
 - `handle_code/`：过去积累的手写代码，包含算法、C++、CUDA、Python 和量化练习。
-- `gpu-kernel-learning/`：CUDA / Tensor Core / CUTLASS / MoE kernel 系统学习区。进入该主题时，先读 [`gpu-kernel-learning/AGENTS.md`](./gpu-kernel-learning/AGENTS.md)。
+- `tensor-core/`：CUDA / Tensor Core / CUTLASS / MoE kernel 系统学习区。进入该主题时，先读 [`tensor-core/AGENTS.md`](./tensor-core/AGENTS.md)。
 
 ## 组织约定
 

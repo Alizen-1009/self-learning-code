@@ -1,21 +1,21 @@
 [submodule "repos/CUDA_Kernel_Samples"]
-	path = gpu-kernel-learning/repos/CUDA_Kernel_Samples
+	path = tensor-core/repos/CUDA_Kernel_Samples
 	url = git@github.com:Tongkaio/CUDA_Kernel_Samples.git
 [submodule "repos/Cuda-Tutorials"]
-	path = gpu-kernel-learning/repos/Cuda-Tutorials
+	path = tensor-core/repos/Cuda-Tutorials
 	url = git@github.com:hengshan/Cuda-Tutorials.git
 [submodule "repos/LeetCUDA"]
-	path = gpu-kernel-learning/repos/LeetCUDA
+	path = tensor-core/repos/LeetCUDA
 	url = git@github.com:xlite-dev/LeetCUDA.git
 [submodule "repos/LeetGPU"]
-	path = gpu-kernel-learning/repos/LeetGPU
+	path = tensor-core/repos/LeetGPU
 	url = git@github.com:MostHumble/LeetGPU.git
 [submodule "repos/accelerated-computing-hub"]
-	path = gpu-kernel-learning/repos/accelerated-computing-hub
+	path = tensor-core/repos/accelerated-computing-hub
 	url = git@github.com:NVIDIA/accelerated-computing-hub.git
 [submodule "repos/how-to-optim-algorithm-in-cuda"]
-	path = gpu-kernel-learning/repos/how-to-optim-algorithm-in-cuda
+	path = tensor-core/repos/how-to-optim-algorithm-in-cuda
 	url = git@github.com:BBuf/how-to-optim-algorithm-in-cuda.git
 [submodule "repos/modern-gpu-programming-for-mlsys"]
-	path = gpu-kernel-learning/repos/modern-gpu-programming-for-mlsys
+	path = tensor-core/repos/modern-gpu-programming-for-mlsys
 	url = git@github.com:mlc-ai/modern-gpu-programming-for-mlsys.git
