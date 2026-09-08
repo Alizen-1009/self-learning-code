@@ -31,41 +31,44 @@
 
 
 
-#include <sys/types.h>
-const int N = 1024, M = 1024;
-int ceil(int a, int b) {
-    return (a + b - 1) / b;
-}
-float A[M + 1][N + 1], B[N + 1][M + 1];
-template<const int BLOCK_SIZE = 32>
-__global__ void transpose(float* A, float* B, int N, int M) {
-    int tx = threadIdx.x, ty = threadIdx.y;
-    int bx = BlockDim.x, by = BlockDim.y;
+// #include <sys/types.h>
+// const int N = 1024, M = 1024;
+// int ceil(int a, int b) {
+//     return (a + b - 1) / b;
+// }
+// float A[M + 1][N + 1], B[N + 1][M + 1];
+// template<const int BLOCK_SIZE = 32>
+// __global__ void transpose(float* A, float* B, int N, int M) {
+//     int tx = threadIdx.x, ty = threadIdx.y;
+//     int bx = BlockIdx.x, by = BlockIdx.y;
 
-    int x = bx * BLOCK_SIZE + tx;
-    int y = by * BLOCK_SIZE + ty;
+//     int x = bx * BLOCK_SIZE + tx;
+//     int y = by * BLOCK_SIZE + ty;
 
-    __shard__ float sdata[BLOCK_SIZE][BLOCK_SIZE + 1];
+//     __shard__ float sdata[BLOCK_SIZE][BLOCK_SIZE + 1];
 
-    if (x < N && y < M) {
-        sdata[tx][ty] = A[y * N + x];
-    }
-    __syncthreads();
+//     if (x < N && y < M) {
+//         sdata[ty][tx] = A[y * N + x];
+//     }
+//     __syncthreads();
 
-    int x2 = bx * BLOCK_SIZE + ty;
-    int y2 = by * BLOCK_SIZE + tx;
-    B[x2 * M + y2] = sdata[ty][tx];
-}
+//     int x2 = by * BLOCK_SIZE + tx;
+//     int y2 = bx * BLOCK_SIZE + ty;
+//     B[y2 * M + x2] = sdata[tx][ty];
+// }
 
-int main() {
-    for (int i = 1; i <= M; i++) {
-        for (int j = 1; j <= N; j++) {
-            A[i][j] = i + j;
-        }
-    }
-    dim3 grid(ceil(M, BLOCK_SIZE), ceil(N, BLOCK_SIZE));
-    dim3 block(BLOCK_SIZE, BLOCK_SIZE);
-    transpose << <grid, block >> > (&A, &B, N, M);
+// int main() {
+//     for (int i = 1; i <= M; i++) {
+//         for (int j = 1; j <= N; j++) {
+//             A[i][j] = i + j;
+//         }
+//     }
+//     dim3 grid(ceil(M, BLOCK_SIZE), ceil(N, BLOCK_SIZE));
+//     dim3 block(BLOCK_SIZE, BLOCK_SIZE);
+//     transpose << <grid, block >> > (&A, &B, N, M);
 
-}
+// }
+
+
+
 
