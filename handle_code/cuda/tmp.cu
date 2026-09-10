@@ -72,3 +72,51 @@
 
 
 
+// const int RADIX_BITS = 4;
+// const int RADIS_SIZE = (1 << RADIX_BITS);
+// const int RADIX_MASK = (RADIS_SIZE - 1);
+
+// __global__ void TopK(int* in, int K, int N, int* ans) {
+//     __shared__ int kth;
+//     __shared__ int count[RADIS_SIZE];
+//     __shared__ int prefix, prefixmask;
+
+//     int tid = threadIdx.x;
+//     if (tid == 0) {
+//         kth = K;
+//         prefix = 0;
+//         prefixmask = 0;
+//     }
+//     __syncthreads();
+
+//     for (int shift = sizeof(int) * 8 - RADIX_BITS; shift >= 0; shift -= RADIX_BITS) {
+//         if (tid < RADIS_SIZE) {
+//             count[tid] = 0;
+//         }
+//         __syncthreads();
+//         for (int i = tid; i < N; i += blockDim.x) {
+//             int val = in[i];
+//             if ((val & prefixmask) == prefix) {
+//                 int dight = (val >> shift) & RADIX_MASK;
+//                 atomicAdd(&count[dight], 1);
+//             }
+//         }
+//         __syncthreads();
+
+//         if (tid == 0) {
+//             for (int i = RADIX_MASK; ~i; i--) {
+//                 int c = count[i];
+//                 if (kth > c) {
+//                     kth -= c;
+//                     continue;
+//                 }
+
+//                 prefix |= (i << shift);
+//                 prefixmask |= (RADIX_MASK << shift);
+//                 break;
+//             }
+//         }
+//         __syncthreads();
+//     }
+//     if (tid == 0) *ans = prefix;
+// }
