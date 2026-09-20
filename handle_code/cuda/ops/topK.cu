@@ -6,7 +6,7 @@ template<const int THREAD_PER_BLOCK>
 __global__ void TopK(const int* in, int N, int K, int* ans) {
     __shared__ int kth;
     __shared__ int count[RADIX_SIZE];
-    __shared__ unsigned int  prefix, prefixMask;
+    __shared__ unsigned int prefix, prefixMask;
 
     int tid = threadIdx.x;
     if (tid == 0) {
@@ -16,7 +16,7 @@ __global__ void TopK(const int* in, int N, int K, int* ans) {
     }
     __syncthreads();
 
-    for (int shift = sizeof(int) * 8 - RADIX_BITS; ~shift; shift -= RADIX_BITS) {
+    for (int shift = sizeof(int) * 8 - RADIX_BITS; shift >= 0; shift -= RADIX_BITS) {
         if (tid < RADIX_SIZE) {
             count[tid] = 0;
         }
