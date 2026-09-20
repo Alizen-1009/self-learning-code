@@ -31,7 +31,7 @@ __global__ void TopK(const int* in, int N, int K, int* ans) {
         __syncthreads();
 
         if (tid == 0) {
-            for (int i = RADIX_SIZE - 1; ~i; i--) {
+            for (int i = RADIX_SIZE - 1; i >= 0; i--) {
                 int c = count[i];
                 if (kth > c) {
                     kth -= c;
