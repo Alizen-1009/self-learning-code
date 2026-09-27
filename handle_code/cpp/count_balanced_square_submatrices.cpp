@@ -1,3 +1,13 @@
+/*
+中文说明：统计二进制方阵中“0 和 1 数量相等”的正方形子矩阵，并按边长输出数量。
+解题方法：先建立二维前缀和；奇数边长不可能平衡，偶数边长枚举左上角，
+用 O(1) 的矩形和判断其中 1 的数量是否等于 len * len / 2。
+复杂度：时间 O(n^3)，空间 O(n^2)。
+
+English: Count square submatrices containing the same number of zeros and ones,
+and print the count for every side length. Build a 2D prefix sum; skip odd side
+lengths and test every even square in O(1). Complexity: O(n^3) time, O(n^2) space.
+*/
 #include <bits/stdc++.h>
 #define ll long long
 #define pf(x) cout << "(" << __LINE__ << ")" << #x << "=" << x << endl

@@ -1,3 +1,15 @@
+/*
+中文说明：处理无向图中的删边操作和两点连通性询问。
+解题方法：并查集不擅长在线删除，因此先记录所有会被删除的边，用从未删除的边建立
+最终图；随后倒序处理询问，把“删边”反转成“加边”，连通性查询直接比较两个根。
+代码还对原始点编号做了离散化。复杂度约 O((m+q)log(m+q)+(m+q)α(n))，空间 O(m+q)。
+当前 set 写法假设边无重数、同一条边的删除语义不重复。
+
+English: Answer edge-deletion and connectivity queries in an undirected graph.
+Build the final graph without deleted edges, then process operations backward so
+each deletion becomes a DSU union. Vertex IDs are compressed. Complexity is
+roughly O((m+q)log(m+q)+(m+q)alpha(n)); the set-based code assumes simple edges.
+*/
 #include <bits/stdc++.h>
 #define ll long long
 #define pf(x) cout << "(" << __LINE__ << ")" << #x << "=" << x << endl

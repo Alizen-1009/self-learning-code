@@ -1,3 +1,15 @@
+/*
+中文说明：在 DAG 中寻找 s 到 t 的最小代价路径，同时把路径上的顶点分到两个集合，
+两个集合各有容量限制；边的费用取决于相邻顶点是否属于同一集合。
+解题方法：先拓扑排序，再做 dp[u][color][used0][used1]。沿有向边转移时枚举下一个
+顶点的集合，增加对应容量并选择 same-set 或 different-set 边权。
+复杂度：时间 O((n+m)+m·cap0·cap1)，空间 O(n·cap0·cap1)，常数包含两种颜色。
+
+English: Find a minimum-cost s-to-t path in a DAG while assigning path vertices
+to two capacity-limited sets. Edge cost depends on whether adjacent vertices use
+the same set. Topological DP tracks vertex, set color, and both used capacities.
+Time O((n+m)+m*cap0*cap1), space O(n*cap0*cap1), up to small color constants.
+*/
 #include <bits/stdc++.h>
 using namespace std;
 

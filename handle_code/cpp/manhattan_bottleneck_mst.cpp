@@ -1,3 +1,15 @@
+/*
+中文说明：把平面点构成完全图，两点边权为 ceil(曼哈顿距离/2)，求连接所有点时
+必须使用的最小最大边权，即最小瓶颈生成树的瓶颈值。
+解题方法：在隐式完全图上运行朴素 Prim。dist[j] 保存 j 到当前生成树的最小边权，
+每次加入 dist 最小的点，并用它更新所有其他点；答案是所有入树边权的最大值。
+复杂度：时间 O(n^2)，空间 O(n)，无需显式保存 O(n^2) 条边。
+
+English: On the complete graph of points, edge weight is ceil(Manhattan/2).
+Compute the minimum possible maximum edge needed to connect all points. A dense
+Prim algorithm maintains each point's cheapest connection; the answer is the
+largest selected edge. O(n^2) time and O(n) space.
+*/
 #include <bits/stdc++.h>
 #define ll long long
 #define pf(x) cout << "(" << __LINE__ << ")" << #x << "=" << x << endl

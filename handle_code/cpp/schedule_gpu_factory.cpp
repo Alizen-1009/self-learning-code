@@ -1,3 +1,17 @@
+/*
+中文说明：GPU 工厂评分题。先在预算内雇佣 parts/mount/box 三类工人，再输出严格
+递增时间的命令，使恰好 N 块板依次完成三个工序。
+解题方法：先保证每站一人，再按“增加一名工人带来的估计吞吐提升/成本”贪心使用
+剩余预算。调度阶段用优先队列维护完成事件，每分钟优先启动下游 box、再 mount、
+最后 parts；无命令可发时直接跳到下一事件。复杂度 O(N log N)，输出恰好 3N 条命令。
+策略保证预算和流程合法，但启发式工人数/调度不保证特殊评测的最优完成时间。
+
+English: GPU Factory scoring solution. Hire legal worker counts, then issue
+strictly timed parts/mount/box commands for exactly N boards. Extra budget is
+assigned by estimated throughput gain per dollar; an event queue drives a
+downstream-first schedule and skips idle time. O(N log N), exactly 3N commands.
+The schedule is valid but the scoring heuristic is not guaranteed optimal.
+*/
 #include <algorithm>
 #include <array>
 #include <cstdint>

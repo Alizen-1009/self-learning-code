@@ -1,3 +1,14 @@
+/*
+中文说明：计算在 n×m 网格中放置若干互不重叠 2×2 方块的方案数（允许一个也不放）。
+解题方法：使用按行轮廓 DP。mask 表示当前行已被上一行方块占用的位置；DFS 从左到右
+选择跳过当前格，或在当前行和下一行放置一个 2×2 方块，并生成下一行的 mask。
+复杂度：约 O(n·3^m)，空间 O(2^m)，因此先令 m 为较小维度。
+
+English: Count ways to place any number of non-overlapping 2x2 squares in an
+n-by-m grid. A row-profile DP stores cells occupied from the previous row, and
+a DFS enumerates skipping or placing each square. About O(n*3^m) time and
+O(2^m) space; m is chosen as the smaller dimension.
+*/
 #include<bits/stdc++.h>
 #define ll long long
 #define pf(x) cout<<"("<<__LINE__<<")"<<#x<<"="<<x<<endl

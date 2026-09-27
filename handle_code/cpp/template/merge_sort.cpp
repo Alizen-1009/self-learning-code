@@ -1,3 +1,14 @@
+/*
+中文说明：归并排序模板，同时提供利用归并过程统计逆序对的版本。
+解题方法：递归排序左右两半，再用双指针合并。统计逆序对时，如果右半元素先被取出，
+它小于左半当前及之后的所有元素，因此增加 mid-i+1。
+复杂度：时间 O(n log n)，辅助空间 O(n)。当前逆序对返回 int，大数组时应改 long long。
+
+English: Merge-sort template plus an inversion-counting variant. Recursively
+sort both halves and merge them; when a right-half value precedes the remaining
+left values, add mid-i+1 inversions. O(n log n) time and O(n) auxiliary space.
+Use long long for the count when n can be large.
+*/
 #include<bits/stdc++.h>
 #define ll long long
 #define pf(x) cout<<"("<<__LINE__<<")"<<#x<<"="<<x<<endl

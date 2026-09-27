@@ -1,3 +1,15 @@
+/*
+中文说明：给定若干已覆盖的整数区间和预算 m，求一个最长连续区间，使其中未覆盖的
+整数点数量不超过 m。
+解题方法：先排序并合并相交或相邻区间，再对区间间空隙做前缀和。二分答案长度，
+枚举每个合并区间作为起点，并二分终点落在哪个区间，从而计算所需填补的空隙。
+复杂度：约 O(n log n log V)，空间 O(n)，V 为答案坐标范围。
+
+English: Given covered integer intervals and a budget m, find the longest
+continuous interval containing at most m uncovered points. Merge intervals,
+prefix-sum the gaps, then binary-search the length and test every start using a
+second binary search. About O(n log n log V) time and O(n) space.
+*/
 #include<bits/stdc++.h>
 #define ll long long
 #define pf(x) cout<<"("<<__LINE__<<")"<<#x<<"="<<x<<endl

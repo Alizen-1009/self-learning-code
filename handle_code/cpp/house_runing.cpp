@@ -1,3 +1,15 @@
+/*
+中文说明：用蒙特卡洛模拟估计骑士在 4×4 棋盘上从角落出发、随机选择合法走法，
+再次到达任意角落所需的平均步数；初始角落不计作结束。
+解题方法：独立模拟 1,000,000 次。每一步枚举八种骑士走法，收集合法位置后等概率
+随机选择，直到落在角落，最后输出总步数/模拟次数。
+复杂度：时间与“模拟次数×每次实际步数”成正比，额外空间 O(1)。结果带随机误差。
+
+English: Monte Carlo estimate of the expected number of random legal knight
+moves on a 4x4 board, starting at a corner and stopping upon reaching a corner
+again. Run one million independent trials. Runtime is proportional to the total
+simulated moves, with O(1) extra space; the output has sampling error.
+*/
 #include <iostream>
 #include <random>
 #include <vector>

@@ -1,3 +1,14 @@
+/*
+中文说明：统计删除一个连续子数组后，剩余所有数的乘积末尾至少有 k 个 0 的删除方案。
+解题方法：把每个数中的完整因子 10、剩余因子 2 和因子 5 分别做前缀计数；删除
+[i,mid] 后，剩余乘积的零数为 cnt10+min(cnt2,cnt5)。对每个左端点二分最大的合法
+右端点并累加方案数。复杂度 O(n log n+总质因子分解次数)，空间 O(n)。
+
+English: Count contiguous subarrays whose removal leaves a product with at least
+k trailing zeros. Prefix-count factors 10, residual 2, and residual 5; for each
+left endpoint, binary-search the farthest removable right endpoint satisfying
+cnt10+min(cnt2,cnt5)>=k. O(n log n) plus factor extraction, O(n) space.
+*/
 #include <bits/stdc++.h>
 #define ll long long
 #define pf(x) cout << "(" << __LINE__ << ")" << #x << "=" << x << endl

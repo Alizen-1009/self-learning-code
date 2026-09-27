@@ -1,3 +1,15 @@
+/*
+中文说明：把机器人顺序从 [A,B,C] 调整为 [C,B,A]，保持每组内部相对顺序不变，
+且只能通过“一个手推车+一个空位”的 moveRobot API 移动。
+解题方法：目标排列可分解成若干置换环。长度 L 的非平凡环先把一个机器人放上车，
+再沿环填空位，最后把车上机器人放回，共 L+1 次且为最少。m==k 时 B 整段不动，
+直接交换对应 A/C，避免在 n 可达 1e9 时扫描整段。复杂度与实际移动位置数线性相关。
+
+English: Reorder [A,B,C] into [C,B,A] while preserving order inside each group,
+using only the one-cart moveRobot API. Decompose the target permutation into
+cycles; a nontrivial cycle of length L is completed optimally in L+1 moves.
+When m==k, B is fixed and paired A/C swaps avoid scanning a potentially huge n.
+*/
 #include <cstdint>
 #include <vector>
 

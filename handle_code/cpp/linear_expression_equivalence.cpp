@@ -1,3 +1,14 @@
+/*
+中文说明：判断两组只含大写变量、加法和减法的线性表达式定义是否等价。
+解题方法：把每个表达式节点递归展开成 26 维系数向量；叶子变量的对应维为 1，
+加减节点按符号合并两个子向量。分别求出两组定义的根向量后直接比较。
+假设定义无环，且每组第一行左值是根。复杂度 O(26·定义数)，空间 O(26·定义数)。
+
+English: Check whether two systems of uppercase-variable linear expressions
+using + and - are equivalent. Recursively expand each node into a 26-component
+coefficient vector and compare the two root vectors. Definitions are assumed
+acyclic and the first left-hand variable is the root. O(26*n) time and space.
+*/
 #include<bits/stdc++.h>
 #define ll long long
 #define pf(x) cout<<"("<<__LINE__<<")"<<#x<<"="<<x<<endl

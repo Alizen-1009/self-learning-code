@@ -1,3 +1,17 @@
+/*
+中文说明：6×6 Gold Egg 交互评分题。奖品格返回 PRIZE，相邻格返回 HINT，其余格
+返回 EMPTY；目标是在有限猜测次数内反复找到奖品。
+解题方法：用 36 位掩码保存候选奖品位置。每次选择能让 HINT/EMPTY 两个最坏分支
+尽量小的格子，根据反馈取交集或删去闭邻域。程序先离线模拟 36 个奖品位置，算出
+该策略每轮最坏需要 12 次，只在剩余次数足够保证完成一轮时开始新一轮。
+复杂度：棋盘固定，单轮为常数开销；这是保证完成的启发式策略，不保证评分最优。
+
+English: Interactive 6x6 Gold Egg scoring strategy. A 36-bit mask tracks prize
+candidates. Each guess greedily minimizes the larger HINT/EMPTY branch, then
+intersects or removes the queried closed neighborhood. Exhaustive simulation
+shows a 12-guess worst case, so a new round starts only when it can be completed.
+Constant work per fixed-size round; valid but not claimed score-optimal.
+*/
 #include <algorithm>
 #include <array>
 #include <cstdint>

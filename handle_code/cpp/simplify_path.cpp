@@ -1,3 +1,14 @@
+/*
+中文说明：把 Linux 绝对路径规范化：合并连续斜杠，忽略 '.'，用 '..' 返回上级目录，
+且不会越过根目录。
+解题方法：逐段扫描路径，用 vector 充当目录栈；普通目录入栈，'..' 弹栈，最后用
+'/' 重新拼接。复杂度 O(|path|) 时间，O(|path|) 空间。main 中给出若干演示样例。
+
+English: Canonicalize a Linux absolute path by collapsing slashes, ignoring '.',
+and applying '..' without moving above root. Scan components and use a vector as
+a directory stack, then join it with '/'. O(|path|) time and space; main contains
+demonstration cases.
+*/
 #include <bits/stdc++.h>
 using namespace std;
 
