@@ -1,14 +1,50 @@
 /*
-中文说明：把机器人顺序从 [A,B,C] 调整为 [C,B,A]，保持每组内部相对顺序不变，
-且只能通过“一个手推车+一个空位”的 moveRobot API 移动。
-解题方法：目标排列可分解成若干置换环。长度 L 的非平凡环先把一个机器人放上车，
-再沿环填空位，最后把车上机器人放回，共 L+1 次且为最少。m==k 时 B 整段不动，
-直接交换对应 A/C，避免在 n 可达 1e9 时扫描整段。复杂度与实际移动位置数线性相关。
+题目：Robot Dance（用一辆手推车重排机器人）
 
-English: Reorder [A,B,C] into [C,B,A] while preserving order inside each group,
-using only the one-cart moveRobot API. Decompose the target permutation into
-cycles; a nontrivial cycle of length L is completed optimally in L+1 moves.
-When m==k, B is fixed and paired A/C swaps avoid scanning a potentially huge n.
+【题意重新表述】
+一排位置最初放着：
+
+    A1,A2,...,Am, B1,B2,...,Bn, C1,C2,...,Ck
+
+要求最终变成：
+
+    C1,C2,...,Ck, B1,B2,...,Bn, A1,A2,...,Am
+
+A、B、C 每组内部的相对顺序不能改变。手推车最多装一个机器人，初始为空；所有位置
+初始都有机器人。moveRobot(pos) 的含义取决于当前状态：车为空时，把 pos 的机器人
+搬上车并留下空位；车非空且 pos 有机器人时，把 pos 的机器人搬到当前空位，pos
+成为新空位；车非空且 pos 正好为空时，把车上的机器人放入该空位并清空手推车。
+目标是合法完成重排，并尽量减少 moveRobot 调用次数。
+
+【固定例子】
+m=2,n=1,k=2 时，初始 [A1,A2,B1,C1,C2]，目标 [C1,C2,B1,A1,A2]。
+目标位置 0 需要原位置 3 的 C1，目标位置 3 又需要原位置 0 的 A1，所以 (0,3)
+构成一个长度 2 的置换环；同理 (1,4) 是另一个环。每个二元环用 3 次移动完成。
+
+【解题方法：置换环】
+对目标位置 p，应该从哪个原位置取机器人：
+
+    p < k       ：m+n+p       （C 组）
+    k <= p<k+n ：m+p-k       （B 组）
+    p >= k+n   ：p-k-n       （A 组）
+
+这个映射是一张置换。长度为 L 的非平凡环必须先拿走一个机器人制造空位，再移动环中
+其余 L-1 个机器人，最后把车上的机器人放回，因此至少 L+1 次；代码也恰好使用 L+1
+次，所以移动数对每个环都是最优的。
+
+特殊边界：总位置数可达 1e9，不能无条件申请同样大的 visited。当 m==k 时，整个 B
+区间已经在原位，A_i 与 C_i 只是 m 个两两交换，直接各用 3 次完成，不扫描巨大的 n。
+当 m!=k 时没有固定位置；题目保证最少移动数不超过 2e7，因此总位置数也不超过该值，
+此时才安全地使用 visited。
+
+复杂度：O(实际涉及重排的位置数) 时间；一般情况使用同阶 visited，m==k 时为 O(m)
+时间和 O(1) 额外空间。
+
+English: Reorder [A,B,C] into [C,B,A] with one cart while preserving order
+inside each group. Map every target position to its original source position and
+decompose that permutation into cycles. A nontrivial length-L cycle needs and
+uses exactly L+1 API calls. When m==k, B is already fixed, so directly swap each
+A_i/C_i pair without scanning a potentially billion-element B segment.
 */
 #include <cstdint>
 #include <vector>
