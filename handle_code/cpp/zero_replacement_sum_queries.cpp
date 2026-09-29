@@ -1,9 +1,10 @@
 /*
-中文说明：数组中的每个 0 可独立替换为查询区间 [l,r] 内的数；对每次查询输出
-替换后数组总和可能达到的最小值和最大值。
-解题方法：预处理非替换状态下的总和 sum 和 0 的数量 cnt。所有 0 都取 l 时最小，
-都取 r 时最大，所以答案分别是 sum+l·cnt 与 sum+r·cnt。
-复杂度：预处理 O(n)，每次查询 O(1)，空间 O(1)。
+题目：把所有 0 替换为区间值后的最小/最大数组和
+【题意】数组中非 0 元素保持不变。每次查询给出允许替换的值域 [l,r]；数组里的
+每个 0 可以独立选取其中任意值。输出这次查询能得到的最小总和和最大总和。
+【方法】只需预处理原数组和 sum，以及 0 的个数 cnt。为了使总和最小，所有 0
+都取 l；为了最大，所有 0 都取 r。因此答案分别是 sum+l*cnt、sum+r*cnt。
+例如 [2,0,0] 与 [3,5] 的输出为 8、12。预处理 O(n)，单次查询 O(1)，空间 O(1)。
 
 English: Each zero may be replaced by a value in query range [l,r]. Output the
 minimum and maximum possible array sum. Precompute the original sum and zero

@@ -1,9 +1,13 @@
 /*
-中文说明：在 DAG 中寻找 s 到 t 的最小代价路径，同时把路径上的顶点分到两个集合，
-两个集合各有容量限制；边的费用取决于相邻顶点是否属于同一集合。
-解题方法：先拓扑排序，再做 dp[u][color][used0][used1]。沿有向边转移时枚举下一个
-顶点的集合，增加对应容量并选择 same-set 或 different-set 边权。
-复杂度：时间 O((n+m)+m·cap0·cap1)，空间 O(n·cap0·cap1)，常数包含两种颜色。
+题目：两个容量受限集合上的 DAG 最短路
+【题意】在有向无环图中选一条 s 到 t 的路，并把路上的每个顶点分配到集合 0
+或 1。顶点 v 会消耗所在集合 pointWeight[v] 的容量；两个集合总消耗分别不超过
+cap0、cap1。相邻顶点在同一集合时，该边费用为 smallCost，否则为 largeCost。
+求所有合法路径与分组中的最小总费用；不可达输出 -1。
+【方法】对 DAG 拓扑排序。状态 dp[u][color][used0][used1] 表示走到 u、u 的
+集合为 color、两个集合已使用对应容量时的最小费用。沿 u->v 时枚举 v 的集合，
+增加其权重并选择相应边费。拓扑顺序保证前驱全部处理后再处理 u。
+时间 O((n+m)+m·cap0·cap1)，空间 O(n·cap0·cap1)，省略常数 2。
 
 English: Find a minimum-cost s-to-t path in a DAG while assigning path vertices
 to two capacity-limited sets. Edge cost depends on whether adjacent vertices use

@@ -16,7 +16,7 @@ using namespace std;
 
 void quick_sort(vector<int>& a, int l, int r) {
     if (l >= r) return;
-    int target = a[l + r >> 1];
+    int target = a[l + (r - l) / 2];
     int i = l, j = r;
     while (i <= j) {
         while (i < j && a[j] > target) j--;

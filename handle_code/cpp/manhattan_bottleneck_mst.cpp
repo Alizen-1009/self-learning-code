@@ -1,9 +1,10 @@
 /*
-中文说明：把平面点构成完全图，两点边权为 ceil(曼哈顿距离/2)，求连接所有点时
-必须使用的最小最大边权，即最小瓶颈生成树的瓶颈值。
-解题方法：在隐式完全图上运行朴素 Prim。dist[j] 保存 j 到当前生成树的最小边权，
-每次加入 dist 最小的点，并用它更新所有其他点；答案是所有入树边权的最大值。
-复杂度：时间 O(n^2)，空间 O(n)，无需显式保存 O(n^2) 条边。
+题目：曼哈顿距离完全图的最小瓶颈连接
+【题意】输入 n 个二维整数坐标。任意两点都可相连，边权为两点曼哈顿距离除以 2
+后向上取整。要把所有点连通，并使所用边中最大的权值尽可能小。
+【方法】任一最小生成树都是最小瓶颈生成树。无需显式构造全部 O(n²) 条边：
+Prim 的 dist[j] 保存点 j 到当前生成树的最小边权，每轮选 dist 最小的未加入点，
+用它更新所有其他点，并记录已选边的最大值。时间 O(n²)，空间 O(n)。
 
 English: On the complete graph of points, edge weight is ceil(Manhattan/2).
 Compute the minimum possible maximum edge needed to connect all points. A dense

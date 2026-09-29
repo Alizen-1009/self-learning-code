@@ -1,8 +1,10 @@
 /*
-中文说明：字符串长度为 n，已有字符 M 或 T 的位置算作满足；最多修改 m 个其他字符，
-求最终最多能有多少个 M/T 字符。
-解题方法：线性统计原有 M/T 数量 cnt，再补上至多 m 个，答案为 min(n,cnt+m)。
-复杂度：时间 O(n)，空间 O(1)。
+题目：最多修改 m 个字符后增加 M/T 的数量
+【题意】输入长度 n、操作上限 m 和字符串 s。已有的 'M' 与 'T' 均算作目标
+字符；一次操作可把其他一个位置改成 M 或 T。求最终目标字符的最大数量。
+【方法】原本已有 cnt 个目标字符；每次操作最多增加 1，且最终数量不超过 n，
+答案就是 min(n,cnt+m)。例如 s="MAT"、m=1，原有两个 M/T，可改掉 A，答案 3。
+扫描一次即可，时间 O(n)，额外空间 O(1)。
 
 English: Maximize the number of characters equal to M or T after changing at
 most m other positions. Count existing M/T characters and return min(n,cnt+m).
