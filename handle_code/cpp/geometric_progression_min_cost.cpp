@@ -1,79 +1,79 @@
 /*
-中文说明：把排序后的数组调整成整数等比数列 1,r,r^2,...，最小化逐项绝对差之和。
-解题方法：排序后枚举整数公比 r，从 1 开始生成各项并累计代价；当当前代价不可能
-优于答案或幂发生溢出时剪枝。该枚举依赖原题对 N/数值范围的约束，N 很小时需特别
-限制 r；当前代码在 N=1 时不会自然结束，属于使用时必须注意的边界。
-复杂度：若枚举到 R，时间 O(N log N+N·R)，空间 O(N)。
+题目：把数组调整为整数等比数列的最小代价
 
-English: Fit the sorted array to 1,r,r^2,... for an integer ratio r, minimizing
-the sum of absolute differences. Enumerate r and prune by the current answer and
-overflow. The usable bound on r depends on the original constraints; notably,
-the current loop needs an explicit bound when N=1. O(N log N+N*R) time, O(N) space.
+【题意】可以把每个整数 a_i 增减任意次数，每次改变 1 的代价为 1。重新排列并调整后，
+希望数组变成 1,c,c^2,...,c^(n-1)，其中 c 是正整数；求最小总绝对差。
+
+【方法】目标数列单调不降，所以先排序 a。枚举公比 c，并计算 sum|a_i-c^i|。当前
+代价已经不小于最好答案时立即停止本轮。对于 n>=3，若 c^(n-1)-a[n-1] 已经不小于
+当前答案，那么仅最后一项就不可能带来更优解；更大的 c 只会更差，因此结束枚举。
+幂使用 __int128 并在超过界限时截断，避免溢出。
+
+n=1 时目标只能是 [1]；n=2 时第二项单独选 c=max(1,a_2)，最小代价是
+|a_1-1|+max(0,1-a_2)。这些分支修复了旧代码 n=1 不结束、
+n=2 枚举范围极大的问题。
+
+复杂度：排序 O(n log n)。若实际枚举 R 个公比，计算为 O(nR)，空间 O(n)。
+
+English: Sort the array and enumerate the positive integer ratio c for the
+target sequence 1,c,c^2,... . Stop once the last target term alone cannot beat
+the current answer, using __int128 to avoid overflow. Handle n=1 and n=2
+directly, fixing the former non-terminating implementation.
 */
-#include <bits/stdc++.h>
-using namespace std;
 
-using ll = long long;
-const ll INF = (1LL << 62);
+#include <algorithm>
+#include <cstdlib>
+#include <iostream>
+#include <vector>
+
+using namespace std;
+using int64 = long long;
+using int128 = __int128_t;
 
 int main() {
     ios::sync_with_stdio(false);
     cin.tie(nullptr);
 
-    int N;
-    cin >> N;
+    int n;
+    cin >> n;
+    vector<int64> values(n);
+    for (int64& value : values) cin >> value;
+    sort(values.begin(), values.end());
 
-    vector<ll> a(N);
-    ll mx = 0;
-    for (int i = 0; i < N; i++) {
-        cin >> a[i];
-        mx = max(mx, a[i]);
+    if (n <= 2) {
+        int64 answer = llabs(values[0] - 1);
+        if (n == 2) answer += std::max<int64>(0, 1 - values[1]);
+        cout << answer << '\n';
+        return 0;
     }
 
-    sort(a.begin(), a.end());
+    int64 answer = 0;
+    for (int64 value : values) answer += llabs(value - 1);
 
-    ll ans = INF;
-
-    // r=1 单独也会被包含
-    for (ll r = 1;; r++) {
-
-        ll cur = 0;
-        ll val = 1;
-        bool ok = true;
-
-        for (int i = 0; i < N; i++) {
-            cur += llabs(a[i] - val);
-
-            if (cur >= ans) {
-                ok = false;
-                break;
-            }
-
-            if (i == N - 1) break;
-
-            // 防止溢出，同时避免继续枚举无意义的大值
-            if (val > (ll)2e18 / max(1LL, r)) {
-                ok = false;
-                break;
-            }
-
-            val *= r;
+    for (int64 ratio = 2;; ++ratio) {
+        const int128 cutoff = static_cast<int128>(values.back()) + answer;
+        int128 lastPower = 1;
+        for (int exponent = 1; exponent < n && lastPower <= cutoff; ++exponent) {
+            lastPower *= ratio;
         }
+        if (lastPower - values.back() >= answer) break;
 
-        if (ok) ans = min(ans, cur);
-
-        // 当 r^(N-1) 已经远超数据范围时即可停止
-        __int128 t = 1;
-        bool stop = false;
-        for (int i = 1; i < N; i++) {
-            t *= r;
-            if (t > (__int128)2e18) {
-                stop = true;
+        int64 cost = 0;
+        int128 target = 1;
+        for (int i = 0; i < n; ++i) {
+            const int128 difference = target >= values[i]
+                                          ? target - values[i]
+                                          : values[i] - target;
+            if (difference >= answer - cost) {
+                cost = answer;
                 break;
             }
+            cost += static_cast<int64>(difference);
+            target *= ratio;
         }
-        if (stop) break;
+        answer = min(answer, cost);
     }
 
-    cout << ans << "\n";
+    cout << answer << '\n';
+    return 0;
 }

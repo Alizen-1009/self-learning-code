@@ -1,68 +1,113 @@
 /*
-中文说明：这是一个线段树练习草稿，目标是维护区间和，并提供区间查询和区间 chmax
-形式的更新接口；当前版本不是可直接使用的正确模板。
-现有结构：node 保存区间边界与 val，operator+ 合并区间和，query 递归查询。
-重要问题：build 在叶子节点赋值后缺少 return，会继续无限递归；modify 对整段只改
-父节点 val、没有下传懒标记，之后查询子区间会不一致。使用前必须修复这两点。
-正确线段树通常建树 O(n)，单次查询/合适的带标记更新 O(log n)，空间 O(n)。
+题目：区间加、区间求和线段树模板
 
-English: An unfinished segment-tree exercise intended for range sums, queries,
-and range-chmax-like updates; it is not currently a correct reusable template.
-build lacks a return at leaves, and modify changes a parent without lazy
-propagation, making child queries inconsistent. Fix both before use. A correct
-tree normally builds in O(n), uses O(log n) per supported operation, and O(n) space.
+【功能】给定一个整数数组，支持两种闭区间操作：
+1. add(l,r,delta)：把 [l,r] 中每个数都加上 delta；
+2. sum(l,r)：返回 [l,r] 中所有数的和。
+
+【方法】每个节点保存负责区间的和，以及尚未传给子节点的 lazy 增量。整段被覆盖时，
+节点和增加 delta*区间长度，同时累计 lazy。访问部分子区间前先 push，把标记传给
+两个孩子，再递归处理，最后用孩子的和更新父节点。
+
+原草稿的 build 在叶子没有 return，会继续递归；modify 对“区间和”取 max 并没有
+明确定义，且缺少下传标记。这里把接口统一成可验证的“区间加、区间求和”。
+
+复杂度：建树 O(n)，每次更新或查询 O(log n)，空间 O(n)。main 使用一个小例子演示。
+
+English: A lazy segment tree for range addition and range sums. Every node
+stores its segment sum and a pending increment. Full-cover updates add
+delta*length; partial operations first propagate the lazy value. Build is
+O(n), each operation O(log n), and storage O(n).
 */
-#include<bits/stdc++.h>
-#define ll long long
-#define pf(x) cout<<"("<<__LINE__<<")"<<#x<<"="<<x<<endl
-using namespace std;
-const int N = 2e5 + 7;
-int a[N];
-struct node {
-    int l, r;
-    int val;
-}t[N << 2];
-node operator + (const node& A, const node& B) {
-    node C;
-    C.l = A.l, C.r = B.r;
-    C.val = A.val + B.val;
-    return C;
-}
-void build(int l, int r, int x = 1) {
-    if (l == r) {
-        t[x].l = l, t[x].r = r;
-        t[x].val = a[l];
-    }
-    int mid = l + r >> 1;
-    build(l, mid, x << 1);
-    build(mid + 1, r, x << 1 | 1);
-    t[x] = t[x << 1] + t[x << 1 | 1];
-}
-void modify(int l, int r, int c, int x = 1) {
-    if (l <= t[x].l && t[x].r <= r) {
-        t[x].val = max(t[x].val, c);
-        return;
-    }
-    int mid = t[x].l + t[x].r >> 1;
-    if (l <= mid) modify(l, r, c, x << 1);
-    if (r > mid) modify(l, r, c, x << 1 | 1);
-    t[x] = t[x << 1] + t[x << 1 | 1];
-}
-node query(int l, int r, int x = 1) {
-    if (l <= t[x].l && t[x].r <= r) return t[x];
-    int mid = t[x].l + t[x].r >> 1;
-    if (l > mid) return query(l, r, x << 1 | 1);
-    else if (r <= mid) return query(l, r, x << 1);
-    return query(l, mid, x << 1) + query(mid + 1, r, x << 1 | 1);
-}
-void solve() {
-}
-int main() {
-    ios::sync_with_stdio(false);
-    cin.tie(nullptr);
-    int T = 1;
-    //cin >> T;
-    while (T--) solve();
 
+#include <iostream>
+#include <vector>
+
+using namespace std;
+using int64 = long long;
+
+class SegmentTree {
+    struct Node {
+        int64 sum = 0;
+        int64 lazy = 0;
+    };
+
+    int size_;
+    vector<Node> tree_;
+
+    void apply(int node, int left, int right, int64 delta) {
+        tree_[node].sum += delta * (right - left + 1);
+        tree_[node].lazy += delta;
+    }
+
+    void push(int node, int left, int right) {
+        if (tree_[node].lazy == 0 || left == right) return;
+        const int middle = left + (right - left) / 2;
+        apply(node * 2, left, middle, tree_[node].lazy);
+        apply(node * 2 + 1, middle + 1, right, tree_[node].lazy);
+        tree_[node].lazy = 0;
+    }
+
+    void build(int node, int left, int right, const vector<int64>& values) {
+        if (left == right) {
+            tree_[node].sum = values[left];
+            return;
+        }
+        const int middle = left + (right - left) / 2;
+        build(node * 2, left, middle, values);
+        build(node * 2 + 1, middle + 1, right, values);
+        tree_[node].sum = tree_[node * 2].sum + tree_[node * 2 + 1].sum;
+    }
+
+    void add(int node, int left, int right,
+             int queryLeft, int queryRight, int64 delta) {
+        if (queryLeft <= left && right <= queryRight) {
+            apply(node, left, right, delta);
+            return;
+        }
+        push(node, left, right);
+        const int middle = left + (right - left) / 2;
+        if (queryLeft <= middle)
+            add(node * 2, left, middle, queryLeft, queryRight, delta);
+        if (queryRight > middle)
+            add(node * 2 + 1, middle + 1, right, queryLeft, queryRight, delta);
+        tree_[node].sum = tree_[node * 2].sum + tree_[node * 2 + 1].sum;
+    }
+
+    int64 sum(int node, int left, int right,
+              int queryLeft, int queryRight) {
+        if (queryLeft <= left && right <= queryRight)
+            return tree_[node].sum;
+        push(node, left, right);
+        const int middle = left + (right - left) / 2;
+        int64 result = 0;
+        if (queryLeft <= middle)
+            result += sum(node * 2, left, middle, queryLeft, queryRight);
+        if (queryRight > middle)
+            result += sum(node * 2 + 1, middle + 1, right, queryLeft, queryRight);
+        return result;
+    }
+
+public:
+    explicit SegmentTree(const vector<int64>& values)
+        : size_(static_cast<int>(values.size())), tree_(size_ * 4) {
+        if (size_ > 0) build(1, 0, size_ - 1, values);
+    }
+
+    void add(int left, int right, int64 delta) {
+        add(1, 0, size_ - 1, left, right, delta);
+    }
+
+    int64 sum(int left, int right) {
+        return sum(1, 0, size_ - 1, left, right);
+    }
+};
+
+int main() {
+    SegmentTree tree({1, 2, 3, 4});
+    cout << tree.sum(0, 3) << '\n';  // 10
+    tree.add(1, 2, 5);
+    cout << tree.sum(0, 3) << '\n';  // 20
+    cout << tree.sum(1, 2) << '\n';  // 15
     return 0;
 }
