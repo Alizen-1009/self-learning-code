@@ -50,15 +50,6 @@ class KVPool:
     def append(self, request_id: str, k: torch.Tensor, v: torch.Tensor) -> None:
         """追加 prefill 或 decode KV，输入形状均为 [layers, tokens, heads, dim]。"""
         seq = self.sequences[request_id]
-        if k.ndim != 4 or v.shape != k.shape:
-            raise ValueError("k and v must have the same 4D shape")
-        if (k.shape[0], k.shape[2], k.shape[3]) != (
-            self.k_cache.shape[0], self.k_cache.shape[3], self.k_cache.shape[4]
-        ):
-            raise ValueError("layers, heads or head_dim does not match the pool")
-        for tensor in (k, v):
-            if tensor.device != self.k_cache.device or tensor.dtype != self.k_cache.dtype:
-                raise ValueError("input device and dtype must match the pool")
 
         num_tokens = k.shape[1]
         new_length = seq.length + num_tokens
@@ -107,21 +98,3 @@ class KVPool:
         self.free_pages.extend(reversed(seq.pages))
 
 
-if __name__ == "__main__":
-    pool = KVPool(
-        num_pages=8, page_size=4, num_layers=2, num_kv_heads=2, head_dim=8
-    )
-    pool.create("req-1")
-
-    # Prefill：6 个 token，占两页，第二页只使用两个槽位。
-    k = torch.randn(2, 6, 2, 8, dtype=torch.float16)
-    v = torch.randn_like(k)
-    pool.append("req-1", k, v)
-
-    # Decode：追加一个 token，继续使用尾页。
-    pool.append("req-1", k[:, :1], v[:, :1])
-    cached_k, cached_v = pool.read("req-1")
-    print("block table:", pool.block_table("req-1"))  # [0, 1]
-    print("KV shape:", cached_k.shape)  # [2, 7, 2, 8]
-    pool.free("req-1")
-    print("free pages:", pool.num_free_pages)  # 8
